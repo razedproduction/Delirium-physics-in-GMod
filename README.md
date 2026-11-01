@@ -1,6 +1,6 @@
 # DMS in Gmod
 
-Delirium (an active ragdoll in the NaturalMotion style) natively in Garry's Mod, in **FOLLOW** mode: the body is an
+Delirium natively in Garry's Mod, in **FOLLOW** mode: the body is an
 ordinary `prop_ragdoll` on the [VPhysics-Box3D](vphysics/) physics (a fork with `IPhysicsNM` and joint armature), and
 every physics step Delirium returns forces and torques for its parts. Homer balances, stumbles, braces and falls on
 his own, and reacts to shots, blasts, fire and blows exactly as he does in the Delirium Playroom.
@@ -9,7 +9,7 @@ his own, and reacts to shots, blasts, fire and blows exactly as he does in the D
 
 ## Playing
 
-You need Garry's Mod's **default branch** launched in x64 on Windows and **your own copy of GTA IV** (PC or Xbox 360): Homer's body
+You need Garry's Mod's **stable branch** launched in x64 on Windows and **your own copy of GTA IV** (PC or Xbox 360): Homer's body
 and NM's data are read from it, nothing of the game is shipped. Download `DMS-<version>-win64.zip` from
 [Releases](https://github.com/razedproduction/DMS-in-Gmod/releases) and follow [docs/install.md](docs/install.md):
 installation, first steps (`dms_homer`, `dms_menu`), FAQ.
