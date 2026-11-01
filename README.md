@@ -9,7 +9,7 @@ his own, and reacts to shots, blasts, fire and blows exactly as he does in the D
 
 ## Playing
 
-You need Garry's Mod's **x86-64 branch** on Windows and **your own copy of GTA IV** (PC or Xbox 360): Homer's body
+You need Garry's Mod's **default branch** launched in x64 on Windows and **your own copy of GTA IV** (PC or Xbox 360): Homer's body
 and NM's data are read from it, nothing of the game is shipped. Download `DMS-<version>-win64.zip` from
 [Releases](https://github.com/razedproduction/DMS-in-Gmod/releases) and follow [docs/install.md](docs/install.md):
 installation, first steps (`dms_homer`, `dms_menu`), FAQ.
