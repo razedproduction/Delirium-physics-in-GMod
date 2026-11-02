@@ -285,6 +285,23 @@ fn hull_clouds(skel: &Skeleton, phy: &[u8], map: &[Option<String>; 21], joints: 
     Some(out)
 }
 
+/// Whether a part's hull points (`hull`) lie on its mesh's (`mesh`): their middles within half the mesh's spread (and
+/// 3 cm), their spreads (the median distance from the middle) within [`HULL_FITS`] of each other. No mesh to check
+/// against: the hull's.
+fn hull_fits(hull: &[Vec3], mesh: &[Vec3]) -> bool {
+    if mesh.len() < FEWEST {
+        return true;
+    }
+    let (ch, cm) = (median3(hull), median3(mesh));
+    let spread = |p: &[Vec3], c: Vec3| median(p.iter().map(|x| x.distance(c)).collect()).unwrap_or(0.0);
+    let (sh, sm) = (spread(hull, ch), spread(mesh, cm));
+    ch.distance(cm) <= sm * 0.5 + 0.03 && (HULL_FITS.0..=HULL_FITS.1).contains(&(sh / sm.max(1e-3)))
+}
+
+/// A hull's spread to its mesh's that still fits it: thinner (clothes and gear make a mesh fat), hardly fatter (a
+/// hull fatter than its mesh is another model's).
+const HULL_FITS: (f32, f32) = (0.6, 1.2);
+
 /// A cross-section round a bone: its centre (an offset across the bone's line), its radius, and whether it lies all
 /// round the bone (else its centre says nothing).
 #[derive(Clone, Copy)]
@@ -645,18 +662,28 @@ pub fn targets(skel: &Skeleton, mesh: &Mesh, phy: Option<&[u8]>, map: &[Option<S
     let j = &plain.shown_joints;
     let mut clouds = clouds(skel, mesh, map, j);
     // The ragdoll's hulls where the model has them (the mesh's details left out by its maker), the mesh elsewhere.
+    // A hull only where it lies on its part's mesh: many models borrow another's `.phy` (a citizen's on a fast
+    // zombie, hands where another model's are).
     let hulls = phy.and_then(|p| hull_clouds(skel, p, map, j));
-    let mut from_hulls = 0;
+    let (mut from_hulls, mut off) = (0, vec![]);
     if let Some(h) = hulls {
-        for (c, h) in clouds.iter_mut().zip(h) {
-            if h.all.len() >= FEWEST {
+        for (k, (c, h)) in clouds.iter_mut().zip(h).enumerate() {
+            if h.all.len() < FEWEST {
+                continue;
+            }
+            if hull_fits(&h.all, &c.all) {
                 *c = h;
                 from_hulls += 1;
+            } else {
+                off.push(PARTS[k]);
             }
         }
     }
     let Measured { factors, thick, centre: across, mut notes } = measure(&clouds, plain);
-    notes.insert(0, if from_hulls > 0 { format!("{from_hulls} part(s) measured on the .phy's hulls, the rest on the mesh") } else { "measured on the mesh (no .phy hulls)".into() });
+    if !off.is_empty() {
+        notes.insert(0, format!("the .phy's hulls of {} don't lie on the mesh: measured on the mesh", off.join(", ")));
+    }
+    notes.insert(0, if from_hulls > 0 { format!("{from_hulls} part(s) measured on the .phy's hulls, the rest on the mesh") } else { "measured on the mesh (no .phy hulls on it)".into() });
     // The feet and hands, both sides each other's mirror images where they nearly are: one way, one size.
     let leaf_of = |k: usize, way: Option<Vec3>| leaf(skel, mesh, map, &clouds[k], plain, k, &plain.body.parts[k].shape, thick[k], way);
     let mut leaves: [Option<Result<Leaf, String>>; 21] = std::array::from_fn(|k| LEAVES.contains(&k).then(|| leaf_of(k, None)));
