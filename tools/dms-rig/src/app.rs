@@ -19,7 +19,7 @@ use crate::render::{Batch, Camera, Renderer, Scene, Shared, View};
 use crate::rigfile::{self, Rig};
 use crate::scene::{self, Hulls};
 use crate::sim::{self, Sim};
-use crate::snap::{self, shape_rot};
+use crate::snap::{self, placement, shape_rot};
 use crate::{Homer, Options};
 
 /// A model open in the editor.
@@ -223,17 +223,6 @@ fn mirror_plane(m: &Model) -> Option<(Vec3, Vec3)> {
     (n != Vec3::ZERO).then_some(((l + r) * 0.5, n))
 }
 
-/// Part `k`'s placement on its bone (the edits' offset and turn) that puts its shape at `at` in the frame `want` (the
-/// shape's own axes), from the fit as it is with the part's edits `pe`.
-fn placement(f: &Fit, k: usize, pe: rigs::PartEdit, at: Vec3, want: Quat) -> (Vec3, Vec3) {
-    // The part's frame without its placement.
-    let t_rot = f.shown[k].rotation * scene::from_angles(pe.turn).inverse();
-    let t_pos = f.shown[k].translation - t_rot * pe.offset;
-    let turn = scene::angles((t_rot.inverse() * want * shape_rot(&f.body.parts[k].shape).inverse()).normalize());
-    // Rounded to a hundredth of a degree: the file's text stays short.
-    (t_rot.inverse() * (at - t_pos), (turn * 100.0).round() / 100.0)
-}
-
 /// The limbs' edits changed since `before` copied to their other sides, mirrored across the model's plane: joints'
 /// moves, sizes and masses as they are, the parts' placement as the other side's mirror image.
 fn mirror(homer: &Homer, m: &mut Model, before: &Rig) {
@@ -364,10 +353,18 @@ impl App {
         }
         if let Some(m) = app.opts.model.clone() {
             app.open(&m);
+            if let Some(y) = app.opts.yaw {
+                app.cam.yaw = y.to_radians();
+            }
             app.sel = app.opts.select.as_ref().and_then(|s| PARTS.iter().position(|p| p.eq_ignore_ascii_case(s)));
             if app.opts.snap {
                 app.snap((0..21).collect());
                 println!("dms-rig: {}", app.status);
+            }
+            // A screenshot of a part: framed close.
+            if let (Some(k), Some(_), Some(Ok(f))) = (app.sel, &app.shot, app.cur.as_ref().map(|m| &m.fit)) {
+                app.cam.target = f.shown[k].translation;
+                app.cam.distance = 0.6;
             }
             if app.shot.as_ref().is_some_and(|s| s.1 > 0) {
                 app.tab = Tab::Sim;
@@ -485,46 +482,16 @@ impl App {
             self.status = "snap: needs the model's mesh".into();
             return;
         };
-        // The plain fit: the model's joints and masses, Homer's parts as they fit them (no sizes, no placement).
-        let mut plain = m.rig.clone();
-        for pe in &mut plain.edits.parts {
-            *pe = rigs::PartEdit { mass: pe.mass, ..rigs::PartEdit::default() };
-        }
-        let (names, edits) = plain.args();
-        let f = match dms_fit::fit::fit(&self.homer.build, &self.homer.body, &m.skel, &m.path, names, edits) {
-            Ok(f) => f,
+        let before = m.rig.clone();
+        let phy = self.fs.read(&format!("{}.phy", m.path.strip_suffix(".mdl").unwrap_or(&m.path))).ok();
+        let done = match snap::snap_rig(&self.homer, &m.skel, mesh, phy.as_deref(), &m.path, &m.rig, &m.map(), &parts) {
+            Ok(d) => d,
             Err(e) => {
                 self.status = format!("snap: {e}");
                 return;
             }
         };
-        let (ts, g) = snap::targets(&m.skel, mesh, &m.map(), &f, &parts);
-        let before = m.rig.clone();
-        for t in &ts {
-            let pe = &mut m.rig.edits.parts[t.k];
-            let round = |v: f32| (v * 1e4).round() / 1e4;
-            match t.shape {
-                Shape::Capsule { radius, half, .. } => {
-                    pe.radius = Some(round(radius));
-                    pe.half = Some(round(half));
-                }
-                Shape::Box { half, .. } => pe.boxed = Some(half.to_array().map(round).into()),
-            }
-        }
-        refit(&self.homer, m);
-        if let Ok(f) = &m.fit {
-            let set: Vec<(usize, Vec3, Vec3)> = ts
-                .iter()
-                .map(|t| {
-                    let (offset, turn) = placement(f, t.k, m.rig.edits.parts[t.k], t.centre, t.frame);
-                    (t.k, offset, turn)
-                })
-                .collect();
-            for (k, offset, turn) in set {
-                m.rig.edits.parts[k].offset = offset;
-                m.rig.edits.parts[k].turn = turn;
-            }
-        }
+        m.rig = done.rig;
         refit(&self.homer, m);
         if self.symmetry && parts.len() == 1 {
             mirror(&self.homer, m, &before);
@@ -533,14 +500,7 @@ impl App {
             m.undo.push(before);
             m.redo.clear();
         }
-        self.status = format!(
-            "{} part(s) laid on the bones; thickness to Homer's: legs ×{:.2}, arms ×{:.2}, torso ×{:.2}, head ×{:.2}",
-            ts.len(),
-            g.legs,
-            g.arms,
-            g.torso,
-            g.head
-        );
+        self.status = done.status;
     }
 
     /// Part `k`'s bone set (`None`: none); the mapping kept only where it differs from the model's own.

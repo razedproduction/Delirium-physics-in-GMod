@@ -69,5 +69,11 @@ over the model, writes the file the addon already reloads, and simulates the bod
   changes (`Posed`, the editor's `shown`): the build, the frames, the masses and the joints are as before
   (`golden body --fit` OK). A rig's hand and foot placement edits are now relative to the new frames.
 - The editor's Snap (B, Shift+B) is our own placement, not the fit's: from the plain fit, the long parts laid along the
-  model's bones at Homer's length and centred in the mesh, thickness Homer's times one factor per group from the mesh
-  (docs/rig-editor.md).
+  model's bones at Homer's length and centred in their cross-sections, the feet and hands over their own, thickness
+  Homer's times bounded factors (the body's, its group's, a small one of its own). It measures the model's ragdoll
+  hulls (`.phy`) where it has them, else its mesh, robustly (the inner shell round a bone, outliers by their median
+  deviation, both sides as one), and leaves a part as the plain fit has it where the data are few or contradict each
+  other, saying why. Its first version took one factor per group from the mesh's 2–98% spans and ballooned on models
+  with armour, pouches or coats (a pelvis given the vest's ×1.87, hands 37 cm off the wrist where the fit put them).
+  `dms-rig --snap-report` scores it against each part's bone and mesh with explicit bounds and drops each body on the
+  fork (docs/rig-editor.md).
