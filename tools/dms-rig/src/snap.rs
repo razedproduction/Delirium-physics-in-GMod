@@ -6,7 +6,7 @@
 //! - keeps Homer's length for its bone (his capsule's half length and its caps' reach past the joints, scaled);
 //! - lies along the model's bone when it is long (a limb's, a clavicle's along the joint to the next; a foot's box along
 //!   the foot's bones, level; a hand's along its fingers), its cross-section centred in its mesh; a round part (the
-//!   pelvis, the spine, the neck, the head) keeps its way and place;
+//!   pelvis, the spine, the neck, the head) keeps its way and place, the head moved into the middle of its mesh;
 //! - is as thick as Homer's times its group's factor (legs, arms, torso; the head its own): the mesh's thickness round
 //!   the group's long parts to the plain fit's, one factor so that one odd part doesn't spoil the rest.
 //!
@@ -286,6 +286,8 @@ pub fn targets(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], plain: 
                     let m = middle(&clouds[k].iter().map(|p| *p - centre0).collect::<Vec<_>>());
                     centre0 + m - along * m.dot(along)
                 }
+                // The head: in the middle of its mesh (the fit puts it where Homer's is on his neck).
+                (None, None) if k == 12 && clouds[k].len() >= 8 => middle(&clouds[k]),
                 _ => centre0,
             };
             let shape = match shape {

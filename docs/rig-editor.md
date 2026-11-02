@@ -40,7 +40,7 @@ reads models where the game has them (its VPKs, loose files, the Workshop's GMAs
   arm, the clavicle) and the hands and feet only follow their forearm or shin. Snap lays every long part along the
   model's bone (the limbs and clavicles joint to joint, a foot's box along its toes kept level, a hand's along its
   fingers), keeps its Homer length, and centres its cross-section in its mesh; the round parts (the pelvis, the spine,
-  the neck, the head) keep their way and place. Thickness is Homer's times one factor per group (legs, arms, torso, head):
+  the neck, the head) keep their way and place (the head is moved into the middle of its mesh). Only the drawn vertices count (a .vvd also holds the other body groups'). Thickness is Homer's times one factor per group (legs, arms, torso, head):
   the mesh's thickness round the thighs and shins, the upper and lower arms, the chest's depth at the spine, the head's
   reach, to the plain fit's, each clamped to 0.5–2 (the status line shows them). Vertices count for the part of their
   main bone (firmly weighted where a part has enough; an unmapped bone's for its nearest mapped ancestor's). The result
