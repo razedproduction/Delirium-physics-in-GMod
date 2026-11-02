@@ -671,7 +671,21 @@ pub fn targets(skel: &Skeleton, mesh: &Mesh, phy: Option<&[u8]>, map: &[Option<S
             if h.all.len() < FEWEST {
                 continue;
             }
-            if hull_fits(&h.all, &c.all) {
+            // A limb's by its cross-section (its spread is its length's), the rest by their spread.
+            let fits = match NEXT[k].filter(|_| LIMBS.contains(&k)) {
+                Some(n) => {
+                    let reach = thickness(&plain.body.parts[k].shape) * REACH;
+                    match (section(&h, j[k], j[n], reach).filter(|s| s.round), section(c, j[k], j[n], reach).filter(|s| s.round)) {
+                        (Some(hs), Some(ms)) => {
+                            (HULL_FITS.0..=HULL_FITS.1).contains(&(hs.radius / ms.radius.max(1e-3))) && hs.centre.distance(ms.centre) <= ms.radius * 0.5
+                        }
+                        (Some(_), None) => true,
+                        _ => false,
+                    }
+                }
+                None => hull_fits(&h.all, &c.all),
+            };
+            if fits {
                 *c = h;
                 from_hulls += 1;
             } else {
