@@ -33,14 +33,19 @@ reads models where the game has them (its VPKs, loose files, the Workshop's GMAs
   joint was clicked last. Ctrl snaps: moves to 1 cm, sizes to 5 mm, turns to 5°; Esc cancels a drag.
 - **Symmetry** (M): an edit of an arm's or a leg's part or joint is made on the other side too, across the model's plane
   between its hips: the joint's move mirrored, the size and mass copied, the part's placement its mirror image.
-- **Snap to bones** (B: the selected part; Shift+B: all): our own placement, not the fit's. Each vertex of the mesh goes
-  to the part of its main bone (firmly weighted vertices where a part has enough of them; an unmapped bone's to its
-  nearest mapped ancestor's part, the spine's by its segments). A long part (a limb's, a clavicle's, a foot's or hand's
-  box) is turned to lie along its bone from its joint to the next one (the feet and hands along their mesh's main axis),
-  its capsule from joint to joint as thick as the middle of its mesh around the bone; a round one (the pelvis, the spine,
-  the neck, the head) keeps its way and takes its piece of mesh: the spine's from the chest's slab between its joints,
-  as deep as the chest. The result is ordinary edits (sizes, the parts moved and turned on their bones): undo, symmetry
-  and the file as for any other; the masses stay.
+- **Snap to bones** (B: the selected part; Shift+B: all): Homer's proportions laid on the model's bones, as thick as its
+  mesh. It starts from the plain fit (the model's joints, no size or placement edits: Homer's parts scaled by the model's
+  bone lengths). The fit builds NM's body in Homer's stance (ADR 0027) and turns each part back onto the model's bind
+  pose by its segment, so a part shows up to ~20° off its bone where Homer's own shape isn't along his joints (the upper
+  arm, the clavicle) and the hands and feet only follow their forearm or shin. Snap lays every long part along the
+  model's bone (the limbs and clavicles joint to joint, a foot's box along its toes kept level, a hand's along its
+  fingers), keeps its Homer length, and centres its cross-section in its mesh; the round parts (the pelvis, the spine,
+  the neck, the head) keep their way and place. Thickness is Homer's times one factor per group (legs, arms, torso, head):
+  the mesh's thickness round the thighs and shins, the upper and lower arms, the chest's depth at the spine, the head's
+  reach, to the plain fit's, each clamped to 0.5–2 (the status line shows them). Vertices count for the part of their
+  main bone (firmly weighted where a part has enough; an unmapped bone's for its nearest mapped ancestor's). The result
+  is ordinary edits (sizes, the parts moved and turned on their bones): undo, symmetry and the file as for any other;
+  the masses stay.
 - **IK** (I): dragging a wrist's or an ankle's joint carries the elbow or knee (the shoulder or hip stays, the limb's
   lengths kept, bent as it was); dragging an elbow or a knee turns it about the limb's line.
 - **Numbers**: the selected part's joint offset (units), size (m), mass (kg), offset (m) and turn (degrees), editable

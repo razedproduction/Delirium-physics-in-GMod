@@ -481,11 +481,25 @@ impl App {
     /// their bones; one undo step, mirrored when symmetric.
     fn snap(&mut self, parts: Vec<usize>) {
         let Some(m) = &mut self.cur else { return };
-        let (Some(mesh), Ok(f)) = (&m.mesh, &m.fit) else {
-            self.status = "snap: needs the model's mesh and a fitted body".into();
+        let Some(mesh) = &m.mesh else {
+            self.status = "snap: needs the model's mesh".into();
             return;
         };
-        let ts = snap::targets(&m.skel, mesh, &m.map(), f, &parts);        let before = m.rig.clone();
+        // The plain fit: the model's joints and masses, Homer's parts as they fit them (no sizes, no placement).
+        let mut plain = m.rig.clone();
+        for pe in &mut plain.edits.parts {
+            *pe = rigs::PartEdit { mass: pe.mass, ..rigs::PartEdit::default() };
+        }
+        let (names, edits) = plain.args();
+        let f = match dms_fit::fit::fit(&self.homer.build, &self.homer.body, &m.skel, &m.path, names, edits) {
+            Ok(f) => f,
+            Err(e) => {
+                self.status = format!("snap: {e}");
+                return;
+            }
+        };
+        let (ts, g) = snap::targets(&m.skel, mesh, &m.map(), &f, &parts);
+        let before = m.rig.clone();
         for t in &ts {
             let pe = &mut m.rig.edits.parts[t.k];
             let round = |v: f32| (v * 1e4).round() / 1e4;
@@ -519,8 +533,14 @@ impl App {
             m.undo.push(before);
             m.redo.clear();
         }
-        let left = parts.len() - ts.len();
-        self.status = format!("{} part(s) laid on the bones{}", ts.len(), if left > 0 { format!("; {left} with too little mesh of their own kept") } else { String::new() });
+        self.status = format!(
+            "{} part(s) laid on the bones; thickness to Homer's: legs ×{:.2}, arms ×{:.2}, torso ×{:.2}, head ×{:.2}",
+            ts.len(),
+            g.legs,
+            g.arms,
+            g.torso,
+            g.head
+        );
     }
 
     /// Part `k`'s bone set (`None`: none); the mapping kept only where it differs from the model's own.

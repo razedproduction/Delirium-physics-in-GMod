@@ -1,6 +1,16 @@
-//! Our own placement of NM's parts on a model (not the fit's): each part's shape laid on the mesh its bones carry —
-//! along its bone from its joint to the next joint, or along its piece of mesh for the pelvis, feet, hands and head —
-//! and sized to that mesh. The result is the rig's edits (sizes, the parts moved and turned on their bones).
+//! Our own placement of NM's parts on a model: Homer's proportions kept, laid on the model's bones, as thick as its
+//! mesh.
+//!
+//! From the plain fit (the model's joints, no size or placement edits: Homer's parts scaled by the model's bone
+//! lengths), each part
+//! - keeps Homer's length for its bone (his capsule's half length and its caps' reach past the joints, scaled);
+//! - lies along the model's bone when it is long (a limb's, a clavicle's along the joint to the next; a foot's box along
+//!   the foot's bones, level; a hand's along its fingers), its cross-section centred in its mesh; a round part (the
+//!   pelvis, the spine, the neck, the head) keeps its way and place;
+//! - is as thick as Homer's times its group's factor (legs, arms, torso; the head its own): the mesh's thickness round
+//!   the group's long parts to the plain fit's, one factor so that one odd part doesn't spoil the rest.
+//!
+//! The result is the rig's edits (sizes, the parts moved and turned on their bones); masses stay.
 
 use delirium::prelude::*;
 use dms_fit::M;
@@ -10,7 +20,7 @@ use dms_game::body::Shape;
 
 use crate::mesh::Mesh;
 
-/// The joint each part runs to (its segment); `None`: laid along its mesh.
+/// The joint each part runs to (its segment); `None`: a leaf or the pelvis.
 const NEXT: [Option<usize>; 21] = [
     None,
     Some(2),
@@ -35,15 +45,19 @@ const NEXT: [Option<usize>; 21] = [
     None,
 ];
 
-/// How much of a part's mesh its shape takes in: the thickness's share (the middle: a limb's skin is round it), and
-/// the ends' cut off each side.
-const THICK: f32 = 0.5;
+/// The groups' long parts that measure their thickness: the thighs and shins, the upper and lower arms, the spine.
+const LEGS: [usize; 4] = [1, 2, 4, 5];
+const ARMS: [usize; 4] = [14, 15, 18, 19];
+const SPINE: [usize; 4] = [7, 8, 9, 10];
 /// A vertex counts for its bone's part when the bone has this much of it (the blends round the joints are left out
 /// where a part has enough mesh without them).
 const FIRM: f32 = 0.75;
-const ENDS: f32 = 0.02;
-/// The most a part is turned to lie along its bone (cos 50°): a shape lying across it (a pelvis, a spine) keeps its way.
+/// The share of a segment's middle that measures it (the ends are its joints' blends).
+const MIDDLE: (f32, f32) = (0.15, 0.85);
+/// The most a part is turned to lie along its bone (cos 50°).
 const ALIGN: f32 = 0.64;
+/// A group's factor's bounds.
+const FACTOR: (f32, f32) = (0.5, 2.0);
 
 /// Where a part's shape goes: its centre, its shape's frame (the shape's own axes), its shape with the new sizes.
 pub struct Target {
@@ -53,17 +67,30 @@ pub struct Target {
     pub shape: Shape,
 }
 
+/// The thickness factors found (the mesh's to Homer's scaled), for the status line.
+pub struct Factors {
+    pub legs: f32,
+    pub arms: f32,
+    pub torso: f32,
+    pub head: f32,
+}
+
 pub fn shape_rot(s: &Shape) -> Quat {
     match *s {
         Shape::Capsule { rot, .. } | Shape::Box { rot, .. } => rot,
     }
 }
 
-/// The shape's long axis in its own frame: a capsule's Y, a box's longest.
-fn long_axis(s: &Shape) -> Vec3 {
+/// The shape's long axis in its own frame (a capsule's Y, a box's longest) and whether it has one worth lying along.
+fn long_axis(s: &Shape) -> (Vec3, bool) {
     match *s {
-        Shape::Capsule { .. } => Vec3::Y,
-        Shape::Box { half, .. } => Vec3::AXES[(0..3).max_by(|&a, &b| half[a].total_cmp(&half[b])).unwrap_or(1)],
+        Shape::Capsule { radius, half, .. } => (Vec3::Y, half >= radius * 0.75),
+        Shape::Box { half, .. } => {
+            let i = (0..3).max_by(|&a, &b| half[a].total_cmp(&half[b])).unwrap_or(1);
+            let mut h = half.to_array();
+            h.sort_by(f32::total_cmp);
+            (Vec3::AXES[i], h[2] >= h[1] * 1.4)
+        }
     }
 }
 
@@ -76,25 +103,14 @@ fn quantile(v: &mut [f32], q: f32) -> f32 {
     v[((v.len() - 1) as f32 * q).round() as usize]
 }
 
+fn median(mut v: Vec<f32>) -> Option<f32> {
+    (!v.is_empty()).then(|| quantile(&mut v, 0.5))
+}
+
 fn seg_dist(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     let ab = b - a;
     let t = ((p - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
     p.distance(a + ab * t)
-}
-
-/// The cloud's main axis (power iteration on its covariance), from `seed`.
-fn principal(pts: &[Vec3], seed: Vec3) -> Vec3 {
-    let mean = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
-    let mut c = Mat3::ZERO;
-    for p in pts {
-        let d = *p - mean;
-        c += Mat3::from_cols(d * d.x, d * d.y, d * d.z);
-    }
-    let mut v = seed.normalize_or(Vec3::Z);
-    for _ in 0..32 {
-        v = (c * v).normalize_or(v);
-    }
-    v
 }
 
 /// The mesh's vertices (m) by the part their main bone belongs to: its own mapped bone's, else its nearest mapped
@@ -117,8 +133,8 @@ fn clouds(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], joints: &[Ve
         let Some((b, w)) = bones.iter().filter(|x| x.1 > 0.0).max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| (x.0 as usize, x.1)) else { continue };
         let Some(mut k) = part_of.get(b).copied().flatten() else { continue };
         let p = Vec3::from_array(*p) * M;
-        if (7..=10).contains(&k) {
-            k = (7..=10).min_by(|&a, &b| seg_dist(p, joints[a], joints[a + 1]).total_cmp(&seg_dist(p, joints[b], joints[b + 1]))).unwrap_or(k);
+        if SPINE.contains(&k) {
+            k = SPINE.into_iter().min_by(|&a, &b| seg_dist(p, joints[a], joints[a + 1]).total_cmp(&seg_dist(p, joints[b], joints[b + 1]))).unwrap_or(k);
         }
         all[k].push(p);
         if w >= FIRM {
@@ -128,97 +144,149 @@ fn clouds(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], joints: &[Ve
     firm.into_iter().zip(all).map(|(f, a)| if f.len() >= 8 { f } else { a }).collect()
 }
 
-/// The parts' shapes laid on the mesh (those with too little mesh of their own are left out).
-pub fn targets(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], f: &Fit, parts: &[usize]) -> Vec<Target> {
-    let j = &f.shown_joints;
-    let clouds = clouds(skel, mesh, map, j);
-    parts
-        .iter()
-        .filter_map(|&k| {
-            let shape = f.body.parts[k].shape;
-            let now = f.shown[k].rotation * shape_rot(&shape);
-            let cur = now * long_axis(&shape);
-            // The part's segment: its joint to the next.
-            let seg = NEXT[k].map(|n| (j[k], j[n])).filter(|(a, b)| a.distance(*b) > 1e-4);
-            // A shape lying across its segment (the pelvis', the spine's) takes only its slab of mesh; the spine's from the
-            // whole chest (a chest's top is mostly its clavicles').
-            let mut pts = if (7..=10).contains(&k) { [7, 8, 9, 10, 13, 17].iter().flat_map(|&i| clouds[i].iter().copied()).collect() } else { clouds[k].clone() };
-            if let Some((a, b)) = seg {
-                let (d, len) = ((b - a).normalize(), a.distance(b));
-                let slab: Vec<Vec3> = pts.iter().copied().filter(|p| (0.0..=len).contains(&(*p - a).dot(d))).collect();
-                if slab.len() >= 8 && cur.dot(d).abs() <= ALIGN {
-                    pts = slab;
-                }
-            }
-            if pts.len() < 8 {
-                return None;
-            }
-            let mean = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
-            let want = match seg {
-                Some((a, b)) => (b - a).normalize(),
-                None => principal(&pts, mean - j[k]),
-            };
-            // Only a long shape has a way to lie (a pelvis, a spine's slab, a neck, a head are round enough to keep theirs).
-            let long = match shape {
-                Shape::Capsule { radius, half, .. } => half >= radius * 0.75,
-                Shape::Box { half, .. } => {
-                    let mut h = half.to_array();
-                    h.sort_by(f32::total_cmp);
-                    h[2] >= h[1] * 1.4
-                }
-            };
-            let aligned = long && cur.dot(want).abs() > ALIGN;
-            let frame = if aligned { (Quat::from_rotation_arc(cur, want * cur.dot(want).signum()) * now).normalize() } else { now };
-            // The segment's middle for a part along its bone, else the mesh's.
-            let segment = seg.filter(|_| aligned).map(|(a, b)| ((a + b) * 0.5, a.distance(b)));
-            let across = seg.filter(|_| !aligned).map(|(a, b)| (frame.inverse() * (b - a)).normalize());
-            let origin = match (segment, seg) {
-                (Some(s), _) => s.0,
-                (None, Some((a, b))) => (a + b) * 0.5,
-                _ => mean,
-            };
-            let local: Vec<Vec3> = pts.iter().map(|p| frame.inverse() * (*p - origin)).collect();
-            let axis = |i: usize| -> (f32, f32) {
-                let mut v: Vec<f32> = local.iter().map(|p| p[i]).collect();
-                (quantile(&mut v, ENDS), quantile(&mut v, 1.0 - ENDS))
-            };
-            // The mesh's middle, kept on its segment's height for a shape across it.
-            let middle = || {
-                let m = Vec3::from_array([axis(0), axis(1), axis(2)].map(|(a, b)| (a + b) * 0.5));
-                across.map_or(m, |d| m - d * m.dot(d))
-            };
-            let (centre, shape) = match shape {
-                Shape::Capsule { rot, .. } => {
-                    let (lo, hi) = match segment {
-                        Some((_, len)) => (-len * 0.5, len * 0.5),
-                        None => axis(1),
-                    };
-                    // Across the axis: the bone's line for a part along its bone, else the mesh's middle.
-                    let mid = if segment.is_some() { Vec3::ZERO } else { middle() * Vec3::new(1.0, 0.0, 1.0) };
-                    let near = local.iter().filter(|p| p.y >= lo && p.y <= hi);
-                    let radius = match across {
-                        // Across a segment: as deep as the slab (its height is the segment's).
-                        Some(d) => {
-                            let e = Vec3::Y.cross(d).normalize_or(Vec3::Z);
-                            let mut v: Vec<f32> = near.map(|p| (*p - mid).dot(e).abs()).collect();
-                            quantile(&mut v, 1.0 - ENDS * 4.0)
-                        }
-                        None => {
-                            let mut v: Vec<f32> = near.map(|p| Vec2::new(p.x - mid.x, p.z - mid.z).length()).collect();
-                            quantile(&mut v, THICK)
-                        }
-                    }
-                    .max(0.01);
-                    let half = ((hi - lo) * 0.5 - radius).max(0.005);
-                    (origin + frame * Vec3::new(mid.x, (lo + hi) * 0.5, mid.z), Shape::Capsule { rot, radius, half })
-                }
-                Shape::Box { rot, .. } => {
-                    let e = [axis(0), axis(1), axis(2)];
-                    let half = Vec3::from_array(e.map(|(a, b)| ((b - a) * 0.5).max(0.01)));
-                    (origin + frame * middle(), Shape::Box { rot, half })
-                }
-            };
-            Some(Target { k, centre, frame, shape })
+/// The points of `pts` in the middle of the segment `a`–`b`, as offsets across it.
+fn across(pts: &[Vec3], a: Vec3, b: Vec3) -> Vec<Vec3> {
+    let (d, len) = ((b - a).normalize_or_zero(), a.distance(b));
+    pts.iter()
+        .filter_map(|p| {
+            let t = (*p - a).dot(d);
+            (t >= len * MIDDLE.0 && t <= len * MIDDLE.1).then(|| *p - a - d * t)
         })
         .collect()
+}
+
+/// The middle of points (each axis' 2–98% span's middle).
+fn middle(pts: &[Vec3]) -> Vec3 {
+    Vec3::from_array([0, 1, 2].map(|i| {
+        let mut v: Vec<f32> = pts.iter().map(|o| o[i]).collect();
+        (quantile(&mut v, 0.02) + quantile(&mut v, 0.98)) * 0.5
+    }))
+}
+
+/// The middle of offsets and how far round it they lie (the median).
+fn round(offsets: &[Vec3]) -> Option<(Vec3, f32)> {
+    if offsets.len() < 8 {
+        return None;
+    }
+    let mid = middle(offsets);
+    median(offsets.iter().map(|o| (*o - mid).length()).collect()).map(|r| (mid, r))
+}
+
+fn thickness(s: &Shape) -> f32 {
+    match *s {
+        Shape::Capsule { radius, .. } => radius,
+        Shape::Box { half, .. } => half.min_element(),
+    }
+}
+
+/// The model's way from a leaf part's bone to its farthest bone below (a foot's toes, a hand's fingers), `None` without.
+fn leaf_way(skel: &Skeleton, map: &[Option<String>; 21], k: usize) -> Option<Vec3> {
+    let b = skel.bones.iter().position(|x| map[k].as_deref() == Some(x.name.as_str()))?;
+    let below = |mut c: usize| loop {
+        match skel.bones[c].parent {
+            Some(p) if p == b => break true,
+            Some(p) => c = p,
+            None => break false,
+        }
+    };
+    let at = skel.bones[b].bind.0;
+    (0..skel.bones.len()).filter(|&c| below(c)).map(|c| skel.bones[c].bind.0 - at).max_by(|x, y| x.length().total_cmp(&y.length())).filter(|w| w.length() > 0.5)
+}
+
+/// The groups' thickness factors from the mesh against the plain fit.
+fn factors(clouds: &[Vec<Vec3>], plain: &Fit) -> Factors {
+    let j = &plain.shown_joints;
+    let limb = |ks: &[usize]| {
+        let ratios = ks
+            .iter()
+            .filter_map(|&k| {
+                let n = NEXT[k]?;
+                round(&across(&clouds[k], j[k], j[n])).map(|(_, r)| r / thickness(&plain.body.parts[k].shape).max(1e-3))
+            })
+            .collect();
+        median(ratios).map_or(1.0, |g| g.clamp(FACTOR.0, FACTOR.1))
+    };
+    // The torso: the chest's depth (front to back) at each spine segment to the spine capsule's radius (they lie
+    // across the body: their radius is its depth). The chest's top is mostly its clavicles'.
+    let chest: Vec<Vec3> = [7, 8, 9, 10, 13, 17].iter().flat_map(|&i| clouds[i].iter().copied()).collect();
+    let torso = median(
+        SPINE
+            .iter()
+            .filter_map(|&k| {
+                let off = across(&chest, j[k], j[k + 1]);
+                let s = plain.body.parts[k].shape;
+                let side = plain.shown[k].rotation * shape_rot(&s) * long_axis(&s).0;
+                let depth = side.cross(j[k + 1] - j[k]).normalize_or_zero();
+                if off.len() < 8 || depth == Vec3::ZERO {
+                    return None;
+                }
+                let mut v: Vec<f32> = off.iter().map(|o| o.dot(depth)).collect();
+                let half = (quantile(&mut v, 0.98) - quantile(&mut v, 0.02)) * 0.5;
+                Some(half / thickness(&s).max(1e-3))
+            })
+            .collect(),
+    )
+    .map_or(1.0, |g| g.clamp(FACTOR.0, FACTOR.1));
+    // The head: its mesh's reach round its middle to the head capsule's.
+    let head = round(&clouds[12])
+        .map(|(_, r)| match plain.body.parts[12].shape {
+            Shape::Capsule { radius, half, .. } => r / (radius + half * 0.5),
+            Shape::Box { half, .. } => r / half.length(),
+        })
+        .map_or(1.0, |g| g.clamp(FACTOR.0, FACTOR.1));
+    Factors { legs: limb(&LEGS), arms: limb(&ARMS), torso, head }
+}
+
+/// The parts' shapes on the model from the plain fit (`plain`), and the thickness factors used.
+pub fn targets(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], plain: &Fit, parts: &[usize]) -> (Vec<Target>, Factors) {
+    let j = &plain.shown_joints;
+    let clouds = clouds(skel, mesh, map, j);
+    let g = factors(&clouds, plain);
+    let out = parts
+        .iter()
+        .map(|&k| {
+            let shape = plain.body.parts[k].shape;
+            let now = plain.shown[k].rotation * shape_rot(&shape);
+            let centre0 = plain.shown[k].translation;
+            let (long, lengthy) = long_axis(&shape);
+            let cur = now * long;
+            let factor = match k {
+                1..=6 => g.legs,
+                13..=20 => g.arms,
+                12 => g.head,
+                _ => g.torso,
+            };
+            // The model's way for a long part: its bone, its foot's bones level, its fingers.
+            let way = match (NEXT[k], k) {
+                (Some(n), _) => Some(j[n] - j[k]),
+                (None, 3 | 6) => leaf_way(skel, map, k).map(|w| w.with_z(0.0)),
+                (None, 16 | 20) => leaf_way(skel, map, k),
+                _ => None,
+            }
+            .map(|w| w.normalize_or_zero())
+            .filter(|w| lengthy && *w != Vec3::ZERO && cur.dot(*w).abs() > ALIGN);
+            let frame = way.map_or(now, |w| (Quat::from_rotation_arc(cur, w * cur.dot(w).signum()) * now).normalize());
+            let centre = match (way, NEXT[k]) {
+                // Along its bone: where the plain fit has it along the bone, centred across in its mesh.
+                (Some(_), Some(n)) => {
+                    let (a, d) = (j[k], (j[n] - j[k]).normalize());
+                    let on = a + d * (centre0 - a).dot(d);
+                    on + round(&across(&clouds[k], j[k], j[n])).map_or(Vec3::ZERO, |(m, _)| m)
+                }
+                // A foot or a hand: centred across in its mesh; along its length where the plain fit has it.
+                (Some(_), None) if clouds[k].len() >= 8 => {
+                    let along = frame * long;
+                    let m = middle(&clouds[k].iter().map(|p| *p - centre0).collect::<Vec<_>>());
+                    centre0 + m - along * m.dot(along)
+                }
+                _ => centre0,
+            };
+            let shape = match shape {
+                Shape::Capsule { rot, radius, half } => Shape::Capsule { rot, radius: radius * factor, half },
+                Shape::Box { rot, half } => Shape::Box { rot, half: Vec3::from_array([0, 1, 2].map(|i| if Vec3::AXES[i] == long { half[i] } else { half[i] * factor })) },
+            };
+            Target { k, centre, frame, shape }
+        })
+        .collect();
+    (out, g)
 }
