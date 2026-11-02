@@ -23,6 +23,8 @@ reads models where the game has them (its VPKs, loose files, the Workshop's GMAs
   it, its bones as lines.
 - **Mapping** (right): a bone for each NM part, from the list or by *pick* and a click on the bone in the view.
   NM's Spine1–3 are always spread between the spine and the neck. A mapping equal to the model's own isn't written.
+- **The head's face**: a yellow arrow out of NM's head shows where it looks (a capsule has no face of its own): Homer's
+  forward as he stands, carried by the head's frame as shown, its turn edits included.
 - **The mouse** in the view: click a part or a joint to select it. Drag a joint (yellow; violet for the spread spine
   joints) to move it. Right button orbits, middle (or Shift + right) pans, the wheel zooms.
 - **The gizmo** on the selected part, one tool at a time (the second toolbar): *Select* (Q, none), *Move* (W: arrows
@@ -83,8 +85,12 @@ the thinner of the arms' and the torso's. No part is thinner than 0.35 of Homer'
   centred on the circle's centre, both sides' mirror images averaged, at most half its thickness off the bone;
 - a foot's or hand's box lies along its way (both sides' made mirror images where they agree), as long as its points
   (0.8–1.25 of Homer's), as wide and thick as their core (10–90%), centred in them; a foot's sole on theirs;
-- the head is moved into the middle of its points (at most 0.6 of its reach); the pelvis, the spine and the neck keep
-  their way and place.
+- the head is turned upright as Homer's head stands, facing the model's way: the fit turns it with its neck segment,
+  and a model whose neck leans further forward than Homer's in its bind pose (HL2's citizens, Kleiner, the Combine:
+  33° against his 15°) got its head bowed 18°. It is moved into the middle of its points' box in that frame (each
+  axis' 3–97% span, not the distances from a median, which the face's many vertices pull forward), at most its
+  reach off the fit's, and sized by the box's extents (the middle of the three);
+- the pelvis, the spine and the neck keep their way and place.
 
 A part whose data are too few or contradict each other stays as the plain fit has it, and the status line says why
 (the first note, and how many more; `--snap-report --verbose` prints them all). A hand without mesh is laid from its
@@ -97,6 +103,7 @@ bounds (`tools/dms-rig/src/report.rs`):
 | score | a fault past |
 |---|---|
 | a long part's axis to its bone; a foot's or hand's to its mesh's way | 20° |
+| the head's face to the model's way (its hips' line across the up) | 10° |
 | thickness to the mesh's (a limb's radius to its cross-section's circle; a box's extents to its points' 5–95%) | 0.55–1.4 |
 | the surface standing out of the mesh (80th percentile; a limb's caps and a box's edges left out) | half its thickness, at least 2.5 cm (a box: half its middle extent) |
 | a capsule's own vertices inside it (a fat capsule swallows them) | 85% |

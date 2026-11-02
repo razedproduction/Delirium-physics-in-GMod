@@ -90,7 +90,7 @@ pub const FLOOR: f32 = 0.35;
 const AGREE: (f32, f32) = (0.2, 0.35);
 /// The farthest a limb's centre moves off its bone, to its thickness; the head off the plain fit's, to its reach.
 const OFFSET: f32 = 0.5;
-const HEAD_MOVE: f32 = 0.6;
+const HEAD_MOVE: f32 = 1.0;
 /// A foot's or hand's length to Homer's: the mesh's, within these.
 const LENGTH: (f32, f32) = (0.8, 1.25);
 /// The most a foot's or hand's way from its bones may be off its mesh's (cos 35°); past it, the mesh's.
@@ -472,6 +472,30 @@ fn leaf_way(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], k: usize) 
     farthest(&|c| carries[c]).or_else(|| farthest(&|c| !skel.bones[c].name.to_ascii_lowercase().contains("attach")))
 }
 
+/// The head's shape frame as Homer's head stands (his stance faces the model's way): the fit turns the head with its
+/// neck, and a model's neck leaning further forward than Homer's (HL2's citizens 33°, his 15°) bows it.
+fn upright_head(plain: &Fit) -> Quat {
+    (plain.frames[12].rotation * shape_rot(&plain.body.parts[12].shape)).normalize()
+}
+
+/// A head's points' box in `frame`: its middle and half extents (each axis' 3–97% span). Spans, not distances from a
+/// median: a face's vertices are many, its back's few, and a median on the face would leave the back of the skull out.
+fn head_box(cloud: &Cloud, frame: Quat) -> Option<(Vec3, Vec3)> {
+    let pts = cloud.pick(|_| true);
+    if pts.len() < FEWEST {
+        return None;
+    }
+    let (mut mid, mut half) = (Vec3::ZERO, Vec3::ZERO);
+    for i in 0..3 {
+        let axis = frame * Vec3::AXES[i];
+        let mut v: Vec<f32> = pts.iter().map(|p| p.dot(axis)).collect();
+        let (lo, hi) = (quantile(&mut v, 0.03), quantile(&mut v, 0.97));
+        mid += axis * (lo + hi) * 0.5;
+        half[i] = (hi - lo) * 0.5;
+    }
+    Some((mid, half))
+}
+
 /// Robust per-part measures and the factors made of them, and what was left out and why.
 struct Measured {
     factors: Factors,
@@ -531,25 +555,14 @@ fn measure(clouds: &[Cloud], plain: &Fit) -> Measured {
         own[0] = spread(&clouds[0], plain.shown[0].translation, world_axis(0), half, None).map(|r| r / radius.max(1e-3));
     }
     own[11] = section(&clouds[11], j[11], j[12], thickness(&shape(11)) * REACH).filter(|s| s.round).map(|s| s.radius / thickness(&shape(11)).max(1e-3));
-    // The head: its mesh's extents along the shape's axes to the shape's (the middle of the three: a hat or a helmet
-    // makes one of them; the face's inside, its teeth and eyes, none).
-    let head = clouds[12].pick(|_| true);
-    if head.len() >= FEWEST {
-        let c = median3(&head);
-        let keep = inliers(&head.iter().map(|p| p.distance(c)).collect::<Vec<_>>());
-        let head: Vec<Vec3> = head.iter().zip(keep).filter(|x| x.1).map(|x| *x.0).collect();
-        let frame = plain.shown[12].rotation * shape_rot(&shape(12));
+    // The head: its mesh's extents along the upright head's axes to the shape's (the middle of the three: a hat or a
+    // helmet makes one of them).
+    if let Some((_, half)) = head_box(&clouds[12], upright_head(plain)) {
         let ext = match shape(12) {
             Shape::Capsule { radius, half, .. } => Vec3::new(radius, radius + half, radius),
             Shape::Box { half, .. } => half,
         };
-        let ratios: Vec<f32> = (0..3)
-            .map(|i| {
-                let mut v: Vec<f32> = head.iter().map(|p| p.dot(frame * Vec3::AXES[i])).collect();
-                (quantile(&mut v, 0.97) - quantile(&mut v, 0.03)) * 0.5 / ext[i].max(1e-3)
-            })
-            .collect();
-        own[12] = median(ratios);
+        own[12] = median((0..3).map(|i| half[i] / ext[i].max(1e-3)).collect());
     }
     // The body's factor: the middle of every measure but the head's (a hat, a helmet, a headcrab).
     let all: Vec<f32> = (0..21).filter(|&k| k != 12).filter_map(|k| own[k]).collect();
@@ -753,26 +766,25 @@ pub fn targets(skel: &Skeleton, mesh: &Mesh, phy: Option<&[u8]>, map: &[Option<S
                     }
                 }
             } else if k == 12 {
-                // The head: in the middle of its mesh (the fit puts it where Homer's is on his neck), not far off.
-                let pts = clouds[12].pick(|_| true);
+                // The head: upright as Homer's stands, in the middle of its mesh (the fit puts it where Homer's is on
+                // his neck), not far off.
+                let upright = upright_head(plain);
                 let reach = match shape {
                     Shape::Capsule { radius, half, .. } => radius + half,
                     Shape::Box { half, .. } => half.max_element(),
                 };
-                let centre = if pts.len() >= FEWEST {
-                    let m = median3(&pts);
-                    let keep = inliers(&pts.iter().map(|p| p.distance(m)).collect::<Vec<_>>());
-                    let pts: Vec<Vec3> = pts.iter().zip(keep).filter(|x| x.1).map(|x| *x.0).collect();
-                    let mid = Vec3::from_array([0, 1, 2].map(|i| {
-                        let mut v: Vec<f32> = pts.iter().map(|o| o[i]).collect();
-                        (quantile(&mut v, 0.03) + quantile(&mut v, 0.97)) * 0.5
-                    }));
-                    centre0 + (mid - centre0).clamp_length_max(reach * HEAD_MOVE)
-                } else {
-                    notes.push("Head: too little mesh, kept".into());
-                    centre0
+                let centre = match head_box(&clouds[12], upright) {
+                    Some((mid, _)) => centre0 + (mid - centre0).clamp_length_max(reach * HEAD_MOVE),
+                    None => {
+                        notes.push("Head: too little mesh, kept".into());
+                        centre0
+                    }
                 };
-                (now, centre)
+                let bow = now.angle_between(upright).to_degrees();
+                if bow > 3.0 {
+                    notes.push(format!("Head: turned upright as Homer's stands ({bow:.0}° off with the neck's lean)"));
+                }
+                (upright, centre)
             } else {
                 (now, centre0)
             };
@@ -893,6 +905,13 @@ fn leaf(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], cloud: &Cloud,
             };
     }
     Ok(Leaf { frame, centre, half: out, note, way, mesh: true })
+}
+
+/// Where NM's head looks over the model (a unit way, the model's space): Homer's forward as he stands (his hips' line
+/// across the up) in the head's frame, the head as shown.
+pub fn face(f: &Fit) -> Vec3 {
+    let forward = (f.joints[1] - f.joints[4]).with_z(0.0).normalize_or_zero().cross(Vec3::Z);
+    f.shown[12].rotation * (f.frames[12].rotation.inverse() * forward)
 }
 
 /// Part `k`'s placement on its bone (the edits' offset and turn) that puts its shape at `at` in the frame `want` (the

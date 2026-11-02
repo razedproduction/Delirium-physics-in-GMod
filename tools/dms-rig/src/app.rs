@@ -962,6 +962,23 @@ impl App {
                 b.hull(pts, tris, f.shown[k], c);
                 sc.batches.push(b);
             }
+            // Where NM's head looks: an arrow out of its face (a capsule shows no face of its own).
+            let shape = f.body.parts[12].shape;
+            let reach = match shape {
+                Shape::Capsule { radius, .. } => radius,
+                Shape::Box { half, .. } => half.max_element(),
+            };
+            let (c, way) = (f.shown[12].translation, snap::face(f));
+            let up = (f.shown[12].rotation * shape_rot(&shape) * Vec3::Y).reject_from(way).normalize_or_zero();
+            let tip = c + way * (reach + 0.1);
+            let colour = [1.0, 0.95, 0.3, 1.0];
+            let mut b = Batch { lines: true, on_top: true, ..Batch::default() };
+            b.line(c + way * reach, tip, colour);
+            for side in [up, way.cross(up)] {
+                b.line(tip, tip - way * 0.03 + side * 0.02, colour);
+                b.line(tip, tip - way * 0.03 - side * 0.02, colour);
+            }
+            sc.batches.push(b);
         }
         if self.show_bones || self.pick.is_some() {
             let map = m.map();

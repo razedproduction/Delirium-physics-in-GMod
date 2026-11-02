@@ -27,6 +27,8 @@ const PAIRS: [(usize, usize); 7] = [(1, 4), (2, 5), (3, 6), (13, 17), (14, 18), 
 /// The faults' bounds.
 /// A long part's axis off its bone, a foot's or hand's off its mesh's way (degrees).
 const ANGLE: f32 = 20.0;
+/// The head's face off the model's (degrees).
+const FACE: f32 = 10.0;
 /// A part's thickness to its mesh's (a limb's radius to its cross-section's, a foot's or hand's extents to its
 /// vertices').
 const RATIO: (f32, f32) = (0.55, 1.4);
@@ -218,6 +220,11 @@ pub fn score(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], f: &Fit, 
                 s.inside = Some(cloud.iter().filter(|p| inside(&shape, r.inverse() * (**p - c))).count() as f32 / cloud.len() as f32);
             }
             let axis = r * long_axis(&shape);
+            // The head's face to the model's (its hips' line across the up).
+            if k == 12 {
+                let forward = (j[1] - j[4]).with_z(0.0).normalize_or_zero().cross(Vec3::Z);
+                s.angle = Some(snap::face(f).angle_between(forward).to_degrees());
+            }
             if let Some(&(_, n)) = LONG.iter().find(|x| x.0 == k) {
                 let (a, d) = (j[k], (j[n] - j[k]).normalize_or_zero());
                 let len = j[k].distance(j[n]);
@@ -320,8 +327,8 @@ pub fn score(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], f: &Fit, 
 /// A part's scores past their bounds.
 fn faults_of(k: usize, s: &Score) -> Vec<String> {
     let mut out = vec![];
-    if let Some(a) = s.angle.filter(|a| *a > ANGLE) {
-        out.push(format!("axis {a:.0}° off"));
+    if let Some(a) = s.angle.filter(|a| *a > if k == 12 { FACE } else { ANGLE }) {
+        out.push(if k == 12 { format!("looks {a:.0}° off the model's way") } else { format!("axis {a:.0}° off") });
     }
     if let Some(r) = s.ratio.filter(|r| *r < RATIO.0 || *r > RATIO.1) {
         out.push(format!("×{r:.2} its mesh's thickness"));

@@ -75,5 +75,7 @@ over the model, writes the file the addon already reloads, and simulates the bod
   deviation, both sides as one), and leaves a part as the plain fit has it where the data are few or contradict each
   other, saying why. Its first version took one factor per group from the mesh's 2–98% spans and ballooned on models
   with armour, pouches or coats (a pelvis given the vest's ×1.87, hands 37 cm off the wrist where the fit put them).
+  The head is turned upright as Homer's stands: the fit turns it with its neck, and a neck leaning further forward
+  than Homer's bowed it (HL2's citizens 18°); the editor draws where NM's head looks.
   `dms-rig --snap-report` scores it against each part's bone and mesh with explicit bounds and drops each body on the
   fork (docs/rig-editor.md).
