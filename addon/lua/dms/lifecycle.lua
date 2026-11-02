@@ -54,7 +54,7 @@ local function forgetFields(ent)
 	for _, k in ipairs(keys) do ent[k] = nil end
 end
 
--- A copy of a ValveBiped ragdoll NM drove (ROADMAP M11): its objects come frozen (as NM held the original's), so its
+-- A copy of a humanoid ragdoll NM drove (ROADMAP M11): its objects come frozen (as NM held the original's), so its
 -- own physics first, then NM again; a copy from a save older than this has the original's fields (`stale`).
 local function adoptRagdoll(ent)
 	local copy = ent.DMS_Copy
@@ -74,12 +74,12 @@ local function adoptRagdoll(ent)
 	if not c then print("[DMS] NM isn't on a ragdoll's copy: " .. tostring(why)) end
 end
 
--- The mark a ValveBiped ragdoll with NM leaves in its copies (ragdolls.lua): a ragdoll's paste doesn't carry its Lua
+-- The mark a humanoid ragdoll with NM leaves in its copies (ragdolls.lua): a ragdoll's paste doesn't carry its Lua
 -- table, only its modifiers.
 duplicator.RegisterEntityModifier("DMS_NM", function(_, ent) ent.DMS_Copy = "attached" end)
 
 local function adopt(ent)
-	if DMS_IsValveBiped(ent) then return adoptRagdoll(ent) end
+	if DMS_IsMapped(ent) then return adoptRagdoll(ent) end
 	if not IsValid(ent) or ent:GetModel() ~= DMS_HOMER_MODEL then return end
 	local copy = ent.DMS_Copy
 	local stale = ent.DMS_Agent ~= nil and DMS_Agents[ent.DMS_Agent] ~= ent

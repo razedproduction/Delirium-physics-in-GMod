@@ -1,23 +1,17 @@
--- GMod's ragdolls with NM on them (ROADMAP M10, ragdolls.lua), the clients' part: the server poses the model's physics
--- objects from NM's body, and the bones NM has a part for but the model has no object for (Spine, Spine1, Spine4,
--- Neck1, the clavicles) are put right here as it's drawn: each in its physics parent's frame as the server
--- sends it (DMS_FP<k>, DMS_FA<k>), the bones under it that have no object of their own carried along.
+-- GMod's ragdolls with NM on them (ROADMAP M10–M12, ragdolls.lua), the clients' part: the server poses the model's
+-- physics objects from NM's body, and the bones NM has a part for but the model has no object for (ValveBiped's Spine,
+-- Spine1, Spine4, Neck1 and clavicles; whatever the rig has) are put right here as it's drawn: each in its physics
+-- parent's frame as the server sends it (DMS_FP<k>, DMS_FA<k>; which bones in DMS_Finish), the bones under it that
+-- have no object of their own carried along. A client needs nothing but the model itself (ROADMAP M12).
 
--- The bones finished, each kept to a physics bone's frame (ragdolls.lua has the same list).
-local FINISHED = {
-	{ "ValveBiped.Bip01_Spine", "ValveBiped.Bip01_Pelvis" },
-	{ "ValveBiped.Bip01_Spine1", "ValveBiped.Bip01_Pelvis" },
-	{ "ValveBiped.Bip01_Spine4", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_Neck1", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_L_Clavicle", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_R_Clavicle", "ValveBiped.Bip01_Spine2" },
-}
-
--- The model's bones: which are finished (and from which parent), which have an object.
+-- The model's bones: which are finished (and from which parent, DMS_Finish's "bone>parent;..."), which have an object.
 local function layout(ent)
 	local fin, phys = {}, {}
-	for k, f in ipairs(FINISHED) do
-		local b, p = ent:LookupBone(f[1]), ent:LookupBone(f[2])
+	local k = 0
+	for pair in ent:GetNW2String("DMS_Finish"):gmatch("[^;]+") do
+		k = k + 1
+		local bone, parent = pair:match("^(.-)>(.*)$")
+		local b, p = bone and ent:LookupBone(bone), parent and ent:LookupBone(parent)
 		if b and p then fin[b] = { k = k, parent = p } end
 	end
 	for i = 0, ent:GetBoneCount() - 1 do
@@ -30,8 +24,10 @@ end
 local function finish(ent, count)
 	if not ent:GetNW2Bool("DMS_Ragdoll") then return end
 	local l = ent.DMS_Layout
-	if not l then
+	local key = ent:GetNW2String("DMS_Finish")
+	if not l or l.key ~= key then
 		l = layout(ent)
+		l.key = key
 		ent.DMS_Layout = l
 	end
 	local delta = {}
@@ -91,9 +87,9 @@ end)
 -- The death camera on a player's server death ragdoll, as GMod's (HL2MP's) follows its client one: over the
 -- ragdoll's root, CHASE units back along the view, stopped by walls; the mouse turns it.
 local CHASE, DEAD_VIEW, WALL = 96, 14, Vector(6, 6, 6)
-local PELVIS = "ValveBiped.Bip01_Pelvis"
 local function chase(ply, rag, angles, fov)
-	local b = rag:LookupBone(PELVIS)
+	local pelvis = rag:GetNW2String("DMS_Pelvis")
+	local b = rag:LookupBone(pelvis ~= "" and pelvis or "ValveBiped.Bip01_Pelvis")
 	local root = b and rag:GetBonePosition(b) or rag:GetPos()
 	local eye = root + Vector(0, 0, DEAD_VIEW)
 	local tr = util.TraceHull({ start = eye, endpos = eye - angles:Forward() * CHASE, mins = -WALL, maxs = WALL, mask = MASK_SOLID, filter = { ply, rag } })

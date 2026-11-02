@@ -1,5 +1,6 @@
-//! GMod's ragdolls (ROADMAP M9–M10, docs/adr/0025, 0027): a model's skeleton read from its `.mdl`, ValveBiped mapped
-//! onto NM's 21 joints and Homer's build fitted to them (`Build::fit`, as the SDK's Unity bridge does), the fitted
+//! GMod's ragdolls (ROADMAP M9–M12, docs/adr/0025, 0027, 0030): a model's skeleton read from its `.mdl`, mapped onto
+//! NM's 21 joints by its rig or a player's mapping (`rigs`) and Homer's build fitted to them (`Build::fit`, as the
+//! SDK's Unity bridge does), the fitted
 //! body made by the fork natively (`VBOX3D_NM_005`/`_006`) in the model's ragdoll's environment, bound and driven in
 //! FOLLOW as Homer is, the model's bones posed from its parts.
 //!
@@ -18,10 +19,14 @@ use crate::data;
 use crate::ffi::vphysics_nm::{self, IPhysicsConstraint, IPhysicsObject, PhysicsNMBodyState, Version};
 use crate::follow::BodyDef;
 use crate::lua::{self, Api, LuaState, TTABLE, native};
+use crate::rigs;
 
 pub const NATIVES: &[(&CStr, lua::CFunction)] = &[
     (c"ModelSkeleton", model_skeleton),
     (c"RagdollFit", ragdoll_fit),
+    (c"ModelClassify", model_classify),
+    (c"FitPreview", fit_preview),
+    (c"RagdollForget", ragdoll_forget),
     (c"FitDump", fit_dump),
     (c"FitLead", fit_lead),
     (c"FitJoints", fit_joints),
@@ -34,7 +39,7 @@ pub const NATIVES: &[(&CStr, lua::CFunction)] = &[
 ];
 
 /// Metres per Source unit.
-const M: f32 = 0.0254;
+pub const M: f32 = 0.0254;
 /// `mstudiobone_t`'s size (studio versions 44 to 49).
 const BONE_SIZE: usize = 216;
 /// Delirium's behaviours are tuned for about this height (m): a fitted body far from it gets a warning.
@@ -119,67 +124,17 @@ pub fn read_mdl(b: &[u8]) -> Result<Skeleton, String> {
     Ok(Skeleton { name: str_at(b, 12)?, version, checksum: i32_at(b, 8)?, bones })
 }
 
-/// ValveBiped's bones on NM's parts, in part order (`delirium_data::nm_asset::PARTS`); `None` where ValveBiped has
-/// no bone of its own (NM's Spine1 to Spine3, spread between Spine and Neck as `NmCharacter.Joints` spreads them).
-pub const VALVEBIPED: [Option<&str>; 21] = [
-    Some("ValveBiped.Bip01_Pelvis"),
-    Some("ValveBiped.Bip01_L_Thigh"),
-    Some("ValveBiped.Bip01_L_Calf"),
-    Some("ValveBiped.Bip01_L_Foot"),
-    Some("ValveBiped.Bip01_R_Thigh"),
-    Some("ValveBiped.Bip01_R_Calf"),
-    Some("ValveBiped.Bip01_R_Foot"),
-    Some("ValveBiped.Bip01_Spine"),
-    None,
-    None,
-    None,
-    Some("ValveBiped.Bip01_Neck1"),
-    Some("ValveBiped.Bip01_Head1"),
-    Some("ValveBiped.Bip01_L_Clavicle"),
-    Some("ValveBiped.Bip01_L_UpperArm"),
-    Some("ValveBiped.Bip01_L_Forearm"),
-    Some("ValveBiped.Bip01_L_Hand"),
-    Some("ValveBiped.Bip01_R_Clavicle"),
-    Some("ValveBiped.Bip01_R_UpperArm"),
-    Some("ValveBiped.Bip01_R_Forearm"),
-    Some("ValveBiped.Bip01_R_Hand"),
-];
-
-/// Which NM part a ValveBiped bone is posed from (S4): its own, or for the spine the part whose span it's in.
-const POSED: [(&str, usize); 21] = [
-    ("ValveBiped.Bip01_Pelvis", 0),
-    ("ValveBiped.Bip01_L_Thigh", 1),
-    ("ValveBiped.Bip01_L_Calf", 2),
-    ("ValveBiped.Bip01_L_Foot", 3),
-    ("ValveBiped.Bip01_R_Thigh", 4),
-    ("ValveBiped.Bip01_R_Calf", 5),
-    ("ValveBiped.Bip01_R_Foot", 6),
-    ("ValveBiped.Bip01_Spine", 7),
-    ("ValveBiped.Bip01_Spine1", 8),
-    ("ValveBiped.Bip01_Spine2", 9),
-    ("ValveBiped.Bip01_Spine4", 10),
-    ("ValveBiped.Bip01_Neck1", 11),
-    ("ValveBiped.Bip01_Head1", 12),
-    ("ValveBiped.Bip01_L_Clavicle", 13),
-    ("ValveBiped.Bip01_L_UpperArm", 14),
-    ("ValveBiped.Bip01_L_Forearm", 15),
-    ("ValveBiped.Bip01_L_Hand", 16),
-    ("ValveBiped.Bip01_R_Clavicle", 17),
-    ("ValveBiped.Bip01_R_UpperArm", 18),
-    ("ValveBiped.Bip01_R_Forearm", 19),
-    ("ValveBiped.Bip01_R_Hand", 20),
-];
-
-/// The parts a ValveBiped ragdoll has no physics object for, each between two that it has (or that come before it
-/// here) and how far along: where their pose comes from when NM takes over the ragdoll's.
+/// The parts a ragdoll may have no physics object for (ValveBiped has none for these), each between two that it has
+/// (or that come before it here) and how far along: where their pose comes from when NM takes over the ragdoll's.
 const BETWEEN: [(usize, usize, usize, f32); 6] = [(7, 0, 9, 1.0 / 3.0), (8, 0, 9, 2.0 / 3.0), (10, 9, 12, 1.0 / 3.0), (11, 9, 12, 2.0 / 3.0), (13, 10, 14, 0.5), (17, 10, 18, 0.5)];
 
-/// NM's 21 joints on a ValveBiped skeleton in its bind pose (m, the model's space), as `NmCharacter.Joints` takes
-/// them from a Unity humanoid: the pelvis, then each part's joint with its parent; the 4 spine joints spread from
-/// Spine to Neck by `spread`; a missing Neck or Clavicle put between its neighbours. Also what was made up.
-pub fn valvebiped_joints(s: &Skeleton, spread: [f32; 3]) -> Result<([Vec3; 21], Vec<String>), String> {
-    let at = |k: usize| VALVEBIPED[k].and_then(|n| s.find(n)).map(|i| s.bones[i].bind.0 * M);
-    let need = |k: usize| at(k).ok_or_else(|| format!("no {} (not a ValveBiped skeleton)", VALVEBIPED[k].unwrap_or("?")));
+/// NM's 21 joints on a mapped skeleton (m, the model's space; `at` its bones' frames in units), as
+/// `NmCharacter.Joints` takes them from a Unity humanoid: the pelvis, then each part's joint with its parent; the 4
+/// spine joints spread from the spine to the neck by `spread`; a missing neck or clavicle put between its neighbours.
+/// Also what was made up.
+pub fn mapped_joints(m: &rigs::Map, at: &[(Vec3, Quat)], spread: [f32; 3]) -> Result<([Vec3; 21], Vec<String>), String> {
+    let at = |k: usize| m[k].map(|b| at[b].0 * M);
+    let need = |k: usize| at(k).ok_or_else(|| format!("no bone for {}", rigs::PARTS[k]));
     let mut made = vec![];
     let (spine, head) = (need(7)?, need(12)?);
     let neck = at(11).unwrap_or_else(|| {
@@ -222,12 +177,60 @@ pub struct Fitted {
     pub frames: Vec<Transform>,
     /// The 21 joints it was fitted to (`Build::fit`'s input, in Homer's stance; m, the model's space).
     pub joints: Vec<Vec3>,
-    /// The model's bones posed from parts (S4): bone, part, the bone's frame in the part's (m).
-    pub posed: Vec<(String, usize, Vec3, Quat)>,
+    /// The model's bones posed from parts (S4).
+    pub posed: Vec<Posed>,
+    /// The bones NM has a part for but the model has no physics object for, each with its nearest ancestor that has
+    /// one: put right on the client (cl_ragdolls.lua).
+    pub finish: Vec<(String, String)>,
     /// What the player should know: joints made up, a height far from NM's tuning, bones posed only on the client.
     pub warnings: Vec<String>,
     pub height: f32,
     pub mass: f32,
+    /// The skeleton's class (`rigs::Class::rig`) and the mapping it was fitted by (`None` for found by itself).
+    pub rig: String,
+    pub map: [Option<String>; 21],
+    pub names: Option<Vec<(String, String)>>,
+    /// Each part's frame in the model's own pose (its reference, m), for showing the capsules over it.
+    pub shown: Vec<Transform>,
+}
+
+/// A model's bone posed from an NM part (S4): its frame in the part's (m), and whether it's the part's own bone (a
+/// mapped joint, or a spine bone in the part's span) or a physics bone carried by its nearest posed ancestor's part.
+pub struct Posed {
+    pub bone: String,
+    pub part: usize,
+    pub at: Vec3,
+    pub turn: Quat,
+    pub own: bool,
+}
+
+/// How far `poseToBone` (the mesh's bind) may be from the chain of the bones' default transforms before the reader
+/// calls the bind pose broken (units, degrees).
+const POSE_GAP: f32 = 0.5;
+const POSE_TURN: f32 = 2.0;
+
+/// The reader's report on a model's bind pose: whether the mapped bones' default transforms disagree with the mesh's
+/// bind (`poseToBone`; proportion tricks, broken exports), and what to say.
+pub fn bind_report(s: &Skeleton, m: &rigs::Map) -> (bool, Vec<String>) {
+    let mut out = vec![];
+    let worst = m.iter().flatten().map(|&b| (b, s.bones[b].bind.0.distance(s.bones[b].pose.0), s.bones[b].bind.1.angle_between(s.bones[b].pose.1).to_degrees())).fold(
+        None::<(usize, f32, f32)>,
+        |w, x| match w {
+            Some(w) if w.1 + w.2 * 0.1 >= x.1 + x.2 * 0.1 => Some(w),
+            _ => Some(x),
+        },
+    );
+    let broken = worst.is_some_and(|(_, gap, turn)| gap > POSE_GAP || turn > POSE_TURN);
+    if let (true, Some((b, gap, turn))) = (broken, worst) {
+        out.push(format!(
+            "broken bind pose: the bones' default transforms are up to {gap:.1} units and {turn:.0}° off the mesh's bind ({}); fitted to the mesh's",
+            s.bones[b].name
+        ));
+    }
+    if s.bones.iter().any(|b| !(b.bind.0.is_finite() && b.bind.1.is_finite() && b.pose.0.is_finite() && b.pose.1.is_finite())) {
+        out.push("the .mdl's bind pose isn't finite".into());
+    }
+    (broken, out)
 }
 
 static FITS: Mutex<Option<HashMap<String, Arc<Fitted>>>> = Mutex::new(None);
@@ -283,22 +286,84 @@ fn repose(body: &dms_game::body::Body, bind: &[Vec3; 21]) -> ([Vec3; 21], [Quat;
     (at, turn)
 }
 
-/// Homer's build fitted to a ValveBiped skeleton (`Build::fit` on Homer's standing frames), NM's spine joints spread
-/// as Homer's are along his spine (ADR 0025), the skeleton put in Homer's stance first ([`repose`], ADR 0027).
-pub fn fit(d: &data::Data, s: &Skeleton) -> Result<Fitted, String> {
-    let (bind, made) = valvebiped_joints(s, homer_spread(&d.body))?;
+/// Homer's build fitted to a humanoid skeleton (`Build::fit` on Homer's standing frames): its joints found by its rig
+/// or a player's mapping (`names`, `{part, bone}`; ROADMAP M12), NM's spine joints spread as Homer's are along his
+/// spine (ADR 0025), the skeleton put in Homer's stance first ([`repose`], ADR 0027). `model` names it in errors.
+pub fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, String)]>) -> Result<Fitted, String> {
+    let bind_at: Vec<Vec3> = s.bones.iter().map(|b| b.bind.0).collect();
+    let class = rigs::classify(s, names, &bind_at)?;
+    if !class.complete() {
+        return Err(class.why(model));
+    }
+    let (broken, report) = bind_report(s, &class.map);
+    // The mesh's bind where the bones' defaults disagree with it: the capsules go where the model is drawn.
+    let at: Vec<(Vec3, Quat)> = s.bones.iter().map(|b| if broken { b.pose } else { b.bind }).collect();
+    if at.iter().any(|(p, q)| !(p.is_finite() && q.is_finite())) {
+        return Err(format!("{model}: the .mdl's bind pose isn't finite"));
+    }
+    let spread = homer_spread(&d.body);
+    let (bind, made) = mapped_joints(&class.map, &at, spread)?;
     let (joints, turn) = repose(&d.body, &bind);
     let frames: Vec<Transform> = d.body.parts.iter().map(|p| Transform::from_translation(p.pos).with_rotation(p.rot)).collect();
     let (build, frames) = d.homer.fit(&frames, &joints);
     let body = dms_game::body::Body::new(&build, &frames);
-    let posed: Vec<(String, usize, Vec3, Quat)> = POSED
+    // The parts' own bones: the mapped joints, then the spine's bones in the spans of Spine0 to Spine3 (ValveBiped's
+    // Spine1, Spine2, Spine4 one each, as M10 had them).
+    let mut own: Vec<(usize, usize)> = (0..21).filter_map(|k| class.map[k].map(|b| (b, k))).collect();
+    let chain = rigs::spine_chain(s, &class.map);
+    let (spine, neck) = (bind[7], bind[11]);
+    for (i, &b) in chain.iter().enumerate() {
+        let k = if chain.len() == 3 {
+            8 + i
+        } else {
+            let t = (at[b].0 * M - spine).dot(neck - spine) / (neck - spine).length_squared().max(1e-6);
+            7 + spread.iter().filter(|&&x| t >= x).count()
+        };
+        own.push((b, k));
+    }
+    own.sort_by_key(|&(_, k)| k);
+    // Every other physics bone is carried by its nearest own ancestor's part (hair, coats, tails stay on the body).
+    let part_of = |mut b: usize| -> usize {
+        loop {
+            if let Some(&(_, k)) = own.iter().find(|o| o.0 == b) {
+                return k;
+            }
+            match s.bones[b].parent {
+                Some(p) => b = p,
+                None => return 0,
+            }
+        }
+    };
+    let carried: Vec<(usize, usize)> = (0..s.bones.len()).filter(|&b| s.bones[b].physics >= 0 && !own.iter().any(|o| o.0 == b)).map(|b| (b, part_of(b))).collect();
+    let posed: Vec<Posed> = own
         .iter()
-        .filter_map(|&(name, k)| {
-            let b = &s.bones[s.find(name)?];
+        .map(|&o| (o, true))
+        .chain(carried.iter().map(|&c| (c, false)))
+        .map(|((b, k), own)| {
             // The bone as the stance has it: turned with its part about the part's joint.
-            let (pos, rot) = (joints[k] + turn[k] * (b.bind.0 * M - bind[k]), (turn[k] * b.bind.1).normalize());
+            let (pos, rot) = (joints[k] + turn[k] * (at[b].0 * M - bind[k]), (turn[k] * at[b].1).normalize());
             let f = frames[k];
-            Some((b.name.clone(), k, f.rotation.inverse() * (pos - f.translation), (f.rotation.inverse() * rot).normalize()))
+            Posed { bone: s.bones[b].name.clone(), part: k, at: f.rotation.inverse() * (pos - f.translation), turn: (f.rotation.inverse() * rot).normalize(), own }
+        })
+        .collect();
+    let finish: Vec<(String, String)> = own
+        .iter()
+        .filter(|o| s.bones[o.0].physics < 0)
+        .filter_map(|&(b, _)| {
+            let mut at = s.bones[b].parent;
+            while let Some(p) = at {
+                if s.bones[p].physics >= 0 {
+                    return Some((s.bones[b].name.clone(), s.bones[p].name.clone()));
+                }
+                at = s.bones[p].parent;
+            }
+            None
+        })
+        .collect();
+    let shown: Vec<Transform> = (0..21)
+        .map(|k| {
+            let (f, back) = (frames[k], turn[k].inverse());
+            Transform::from_translation(bind[k] + back * (f.translation - joints[k])).with_rotation((back * f.rotation).normalize())
         })
         .collect();
     let (height, mass) = (height(&body), body.parts.iter().map(|p| p.mass).sum::<f32>());
@@ -306,12 +371,34 @@ pub fn fit(d: &data::Data, s: &Skeleton) -> Result<Fitted, String> {
     if (height - TUNED_HEIGHT).abs() > HEIGHT_WARN {
         warnings.push(format!("{height:.2} m tall: Delirium's behaviours are tuned for about {TUNED_HEIGHT} m and work worse this far from it"));
     }
-    let missing: Vec<&str> = VALVEBIPED.iter().flatten().copied().filter(|n| s.find(n).and_then(|i| (s.bones[i].physics >= 0).then_some(())).is_none()).collect();
-    if missing.len() > 6 {
-        warnings.push(format!("{} of NM's bones have no physics object here: they're drawn on the client only", missing.len()));
+    warnings.extend(report);
+    let unphysical = own.iter().filter(|o| s.bones[o.0].physics < 0).count();
+    if unphysical > 6 {
+        warnings.push(format!("{unphysical} of NM's bones have no physics object here: they're drawn on the client only"));
     }
-    Ok(Fitted { def: Arc::new(BodyDef { build, body, fitted: true }), checksum: s.checksum, frames, joints: joints.to_vec(), posed, warnings, height, mass })
+    if finish.len() > FINISH_MAX {
+        warnings.push(format!("{} bones to finish on the client: only the first {FINISH_MAX} are", finish.len()));
+    }
+    let map = std::array::from_fn(|k| class.map[k].map(|b| s.bones[b].name.clone()));
+    Ok(Fitted {
+        def: Arc::new(BodyDef { build, body, fitted: true }),
+        checksum: s.checksum,
+        frames,
+        joints: joints.to_vec(),
+        posed,
+        finish,
+        warnings,
+        height,
+        mass,
+        rig: class.rig,
+        map,
+        names: names.map(<[_]>::to_vec),
+        shown,
+    })
 }
+
+/// The most bones the client finishes (each takes two NW2 vars on the ragdoll).
+pub const FINISH_MAX: usize = 16;
 
 /// The body's height (m): its lowest point to its highest, its parts' capsules as they stand.
 fn height(body: &dms_game::body::Body) -> f32 {
@@ -324,9 +411,9 @@ fn height(body: &dms_game::body::Body) -> f32 {
 
 native!(model_skeleton => model_skeleton_impl);
 /// `DMS.ModelSkeleton(mdl)`: the `.mdl`'s bytes (`file.Read(model, "GAME")`) read: `{name, version, checksum,
-/// bones = {{name, parent, pos, rot, physics, pose_gap, pose_turn}, ...}}`, `parent` 0-based (-1 for a root), `pos`
-/// and `rot` the bind pose in the model's space (units, quaternion), `pose_gap` (units) and `pose_turn` (degrees) how
-/// far `poseToBone`'s bind is from the chain of default transforms.
+/// bones = {{name, parent, pos, rot, mesh_pos, mesh_rot, physics, pose_gap, pose_turn}, ...}}`, `parent` 0-based (-1
+/// for a root), `pos` and `rot` the bind pose in the model's space (units, quaternion), `mesh_pos` and `mesh_rot` the
+/// mesh's bind (`poseToBone` inverted), `pose_gap` (units) and `pose_turn` (degrees) how far they are apart.
 unsafe fn model_skeleton_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
     let s = read_mdl(unsafe { api.check_bytes(l, 1)? })?;
     unsafe {
@@ -336,12 +423,14 @@ unsafe fn model_skeleton_impl(api: &Api, l: *mut LuaState) -> Result<c_int, Stri
         api.set_number(l, c"checksum", f64::from(s.checksum));
         (api.createtable)(l, s.bones.len() as c_int, 0);
         for (i, b) in s.bones.iter().enumerate() {
-            (api.createtable)(l, 0, 7);
+            (api.createtable)(l, 0, 9);
             api.set_str(l, c"name", &b.name);
             api.set_number(l, c"parent", b.parent.map_or(-1.0, |p| p as f64));
             api.set_vector(l, c"pos", &b.bind.0.to_array());
             api.set_vector(l, c"rot", &b.bind.1.to_array());
             api.set_number(l, c"physics", f64::from(b.physics));
+            api.set_vector(l, c"mesh_pos", &b.pose.0.to_array());
+            api.set_vector(l, c"mesh_rot", &b.pose.1.to_array());
             api.set_number(l, c"pose_gap", f64::from(b.bind.0.distance(b.pose.0)));
             api.set_number(l, c"pose_turn", f64::from(b.bind.1.angle_between(b.pose.1).to_degrees()));
             api.append(l, i + 1);
@@ -351,47 +440,206 @@ unsafe fn model_skeleton_impl(api: &Api, l: *mut LuaState) -> Result<c_int, Stri
     Ok(1)
 }
 
+/// A mapping handed over by Lua (`{[part] = bone}`, NM's part names; `nil` for the rig's own), as `{part, bone}`.
+unsafe fn mapping_arg(api: &Api, l: *mut LuaState, arg: c_int) -> Result<Option<Vec<(String, String)>>, String> {
+    let t = unsafe { (api.type_)(l, arg) };
+    if t <= lua::TNIL {
+        return Ok(None);
+    }
+    if t != TTABLE {
+        return Err(format!("bad argument #{arg} (a mapping {{[part] = bone}} expected)"));
+    }
+    let mut out = vec![];
+    for part in rigs::PARTS {
+        let name = std::ffi::CString::new(part).unwrap_or_default();
+        unsafe { (api.getfield)(l, arg, name.as_ptr()) };
+        if unsafe { (api.type_)(l, -1) } > lua::TNIL {
+            out.push((part.to_string(), unsafe { api.check_string(l, -1) }?));
+        }
+        unsafe { (api.settop)(l, -2) };
+    }
+    Ok(Some(out))
+}
+
+/// `{[part] = bone}` of a mapping (`nil` parts left out).
+unsafe fn push_map(api: &Api, l: *mut LuaState, map: &[Option<String>; 21]) {
+    unsafe {
+        (api.createtable)(l, 0, 21);
+        for (k, b) in map.iter().enumerate() {
+            if let Some(b) = b {
+                api.set_str(l, &std::ffi::CString::new(rigs::PARTS[k]).unwrap_or_default(), b);
+            }
+        }
+    }
+}
+
+unsafe fn push_strings(api: &Api, l: *mut LuaState, items: &[String]) {
+    unsafe {
+        (api.createtable)(l, items.len() as c_int, 0);
+        for (i, w) in items.iter().enumerate() {
+            api.push_str(l, w);
+            api.append(l, i + 1);
+        }
+    }
+}
+
+native!(model_classify => model_classify_impl);
+/// `DMS.ModelClassify(mdl[, mapping])`: what the `.mdl`'s skeleton is to DMS (ROADMAP M12): `{rig, complete,
+/// humanoid, why, map = {[part] = bone}, missing = {parts}, problems = {...}, report = {...}, parts = {NM's 21 part
+/// names}, optional = {[part] = true}}`; `rig` a known rig's name, `by names`, `mapped` (with `mapping`), `unknown` or
+/// `not humanoid`; `report` the reader's (a broken bind pose).
+unsafe fn model_classify_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
+    let s = read_mdl(unsafe { api.check_bytes(l, 1)? })?;
+    let names = unsafe { mapping_arg(api, l, 2)? };
+    let at: Vec<Vec3> = s.bones.iter().map(|b| b.bind.0).collect();
+    let class = rigs::classify(&s, names.as_deref(), &at)?;
+    let (_, report) = bind_report(&s, &class.map);
+    let map = std::array::from_fn(|k| class.map[k].map(|b| s.bones[b].name.clone()));
+    let missing: Vec<String> = class.missing.iter().map(|p| p.to_string()).collect();
+    unsafe {
+        (api.createtable)(l, 0, 10);
+        api.set_str(l, c"rig", &class.rig);
+        api.set_bool(l, c"complete", class.complete());
+        api.set_bool(l, c"humanoid", class.humanoid());
+        api.set_str(l, c"why", &if class.complete() { String::new() } else { class.why(&s.name) });
+        push_map(api, l, &map);
+        (api.setfield)(l, -2, c"map".as_ptr());
+        push_strings(api, l, &missing);
+        (api.setfield)(l, -2, c"missing".as_ptr());
+        push_strings(api, l, &class.problems);
+        (api.setfield)(l, -2, c"problems".as_ptr());
+        push_strings(api, l, &report);
+        (api.setfield)(l, -2, c"report".as_ptr());
+        push_strings(api, l, &rigs::PARTS.map(String::from));
+        (api.setfield)(l, -2, c"parts".as_ptr());
+        (api.createtable)(l, 0, rigs::OPTIONAL.len() as c_int);
+        for k in rigs::OPTIONAL {
+            api.set_bool(l, &std::ffi::CString::new(rigs::PARTS[k]).unwrap_or_default(), true);
+        }
+        (api.setfield)(l, -2, c"optional".as_ptr());
+    }
+    Ok(1)
+}
+
+/// A fit's numbers for Lua: height, mass, rig, warnings, the mapping it used.
+unsafe fn push_fit_summary(api: &Api, l: *mut LuaState, f: &Fitted) {
+    unsafe {
+        api.set_number(l, c"height", f64::from(f.height));
+        api.set_number(l, c"mass", f64::from(f.mass));
+        api.set_str(l, c"rig", &f.rig);
+        push_strings(api, l, &f.warnings);
+        (api.setfield)(l, -2, c"warnings".as_ptr());
+        push_map(api, l, &f.map);
+        (api.setfield)(l, -2, c"map".as_ptr());
+    }
+}
+
+native!(fit_preview => fit_preview_impl);
+/// `DMS.FitPreview(model, mdl[, mapping])`: Homer's build fitted to the `.mdl` by `mapping` (or its rig) without
+/// keeping it, for the mapping editor: `{height, mass, rig, warnings, map, parts = {{name, pos, ang, shape = "capsule",
+/// a, b, radius} | {name, pos, ang, shape = "box", half}, ...}, joints = {pos, ...}}`, the parts as they lie over the
+/// model in its own pose (units, the model's space; `a`, `b` a capsule's ends, `half` a box's half extents). A Lua error
+/// for a mapping that can't be fitted.
+unsafe fn fit_preview_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
+    let model = unsafe { api.check_string(l, 1)? };
+    let s = read_mdl(unsafe { api.check_bytes(l, 2)? })?;
+    let names = unsafe { mapping_arg(api, l, 3)? };
+    let d = data::get().ok_or_else(|| format!("NM's data isn't loaded (DMS.LoadData): {}", data::how_to()))?;
+    let f = fit(&d, &s, &model, names.as_deref())?;
+    unsafe {
+        (api.createtable)(l, 0, 8);
+        push_fit_summary(api, l, &f);
+        (api.createtable)(l, 21, 0);
+        for (k, (p, t)) in f.def.body.parts.iter().zip(&f.shown).enumerate() {
+            (api.createtable)(l, 0, 7);
+            api.set_str(l, c"name", p.name);
+            api.set_vector(l, c"pos", &(t.translation / M).to_array());
+            match p.shape {
+                dms_game::body::Shape::Capsule { rot, radius, half } => {
+                    let axis = t.rotation * rot * Vec3::Y * half;
+                    api.set_str(l, c"shape", "capsule");
+                    api.set_vector(l, c"a", &((t.translation - axis) / M).to_array());
+                    api.set_vector(l, c"b", &((t.translation + axis) / M).to_array());
+                    api.set_number(l, c"radius", f64::from(radius / M));
+                }
+                dms_game::body::Shape::Box { rot, half } => {
+                    api.set_str(l, c"shape", "box");
+                    api.set_vector(l, c"ang", &angles(t.rotation * rot));
+                    api.set_vector(l, c"half", &(half / M).to_array());
+                }
+            }
+            api.append(l, k + 1);
+        }
+        (api.setfield)(l, -2, c"parts".as_ptr());
+        (api.createtable)(l, 21, 0);
+        // Where the joints are over the model's own pose: each part's joint carried back from the stance.
+        for (k, j) in f.joints.iter().enumerate() {
+            let (sf, ff) = (f.shown[k], f.frames[k]);
+            let back = sf.rotation * ff.rotation.inverse();
+            api.push_vector(l, &((sf.translation + back * (*j - ff.translation)) / M).to_array());
+            api.append(l, k + 1);
+        }
+        (api.setfield)(l, -2, c"joints".as_ptr());
+    }
+    Ok(1)
+}
+
+native!(ragdoll_forget => ragdoll_forget_impl);
+/// `DMS.RagdollForget(model)`: the model's kept fit dropped (its mapping changed); bodies already made keep theirs.
+unsafe fn ragdoll_forget_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
+    let key = unsafe { api.check_string(l, 1)? };
+    if let Some(m) = FITS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        m.remove(&key);
+    }
+    Ok(0)
+}
+
 native!(ragdoll_fit => ragdoll_fit_impl);
-/// `DMS.RagdollFit(model, mdl)`: Homer's build fitted to the ValveBiped `.mdl` (`model` its path, `mdl` its bytes),
-/// kept by the path and the `.mdl`'s checksum (a changed model is fitted again): `{height, mass, homer_height,
-/// homer_mass, checksum, cached, ms, warnings = {...}, bones = {[bone] = part}, parts = {{name, mass, radius, half,
-/// size}, ...}}` (m, kg; `bones` the model's bones NM's parts pose, 0-based parts). A Lua error for a model that isn't
-/// ValveBiped.
+/// `DMS.RagdollFit(model, mdl[, mapping])`: Homer's build fitted to the humanoid `.mdl` (`model` its path, `mdl` its
+/// bytes) by its rig or `mapping` (`{[part] = bone}`, ROADMAP M12), kept by the path, the `.mdl`'s checksum and the
+/// mapping (a changed model or mapping is fitted again): `{height, mass, rig, map, homer_height, homer_mass, checksum,
+/// cached, ms, warnings = {...}, bones = {[bone] = part}, finish = {{bone, parent}, ...}, parts = {{name, mass,
+/// radius, half, size}, ...}}` (m, kg; `bones` the model's bones NM's parts pose, 0-based parts; `finish` the bones the
+/// client puts right). A Lua error for a model that can't be fitted (not a humanoid, an unknown rig without a mapping).
 unsafe fn ragdoll_fit_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
     let key = unsafe { api.check_string(l, 1)? };
     let bytes = unsafe { api.check_bytes(l, 2)? };
+    let names = unsafe { mapping_arg(api, l, 3)? };
     let d = data::get().ok_or_else(|| format!("NM's data isn't loaded (DMS.LoadData): {}", data::how_to()))?;
     let started = std::time::Instant::now();
     let checksum = i32_at(bytes, 8).unwrap_or(0);
-    let kept = fitted(&key).ok().filter(|f| f.checksum == checksum);
+    let kept = fitted(&key).ok().filter(|f| f.checksum == checksum && f.names == names);
     let cached = kept.is_some();
     let f = match kept {
         Some(f) => f,
         None => {
-            let f = Arc::new(fit(&d, &read_mdl(bytes)?)?);
+            let f = Arc::new(fit(&d, &read_mdl(bytes)?, &key, names.as_deref())?);
             FITS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(key, f.clone());
             f
         }
     };
     let body = &f.def.body;
     unsafe {
-        (api.createtable)(l, 0, 10);
-        api.set_number(l, c"height", f64::from(f.height));
-        api.set_number(l, c"mass", f64::from(f.mass));
+        (api.createtable)(l, 0, 14);
+        push_fit_summary(api, l, &f);
+        (api.createtable)(l, f.finish.len().min(FINISH_MAX) as c_int, 0);
+        for (i, (bone, parent)) in f.finish.iter().take(FINISH_MAX).enumerate() {
+            (api.createtable)(l, 2, 0);
+            api.push_str(l, bone);
+            api.append(l, 1);
+            api.push_str(l, parent);
+            api.append(l, 2);
+            api.append(l, i + 1);
+        }
+        (api.setfield)(l, -2, c"finish".as_ptr());
         api.set_number(l, c"homer_height", f64::from(height(&d.body)));
         api.set_number(l, c"homer_mass", f64::from(d.body.parts.iter().map(|p| p.mass).sum::<f32>()));
         api.set_number(l, c"checksum", f64::from(f.checksum));
         api.set_bool(l, c"cached", cached);
         api.set_number(l, c"ms", started.elapsed().as_secs_f64() * 1000.0);
-        (api.createtable)(l, f.warnings.len() as c_int, 0);
-        for (i, w) in f.warnings.iter().enumerate() {
-            api.push_str(l, w);
-            api.append(l, i + 1);
-        }
-        (api.setfield)(l, -2, c"warnings".as_ptr());
         (api.createtable)(l, 0, f.posed.len() as c_int);
-        for (bone, k, _, _) in &f.posed {
-            api.set_number(l, &std::ffi::CString::new(bone.as_str()).unwrap_or_default(), *k as f64);
+        for b in &f.posed {
+            api.set_number(l, &std::ffi::CString::new(b.bone.as_str()).unwrap_or_default(), b.part as f64);
         }
         (api.setfield)(l, -2, c"bones".as_ptr());
         (api.createtable)(l, body.parts.len() as c_int, 0);
@@ -563,15 +811,28 @@ fn parts_from_model(f: &Fitted, objects: &[(String, *mut IPhysicsObject, Vec3)])
     let nm = vphysics_nm::get().ok_or("IPhysicsNM isn't available")?;
     let n = f.def.body.parts.len();
     let mut parts: Vec<Option<PartState>> = vec![None; n];
-    for (name, obj, origin) in objects {
-        let Some((_, k, at, turn)) = f.posed.iter().find(|p| p.0.eq_ignore_ascii_case(name)) else { continue };
+    // A part's state from an object of a bone it poses.
+    let from = |p: &Posed, obj: *mut IPhysicsObject, origin: Vec3| -> Result<PartState, String> {
         // SAFETY: a PhysObj of the model's ragdoll Lua handed over.
-        let s = unsafe { nm.body_state(*obj) }.ok_or("GetBodyState failed")?;
+        let s = unsafe { nm.body_state(obj) }.ok_or("GetBodyState failed")?;
         let bone_rot = Quat::from_array(s.rotation).normalize();
-        let rot = (bone_rot * turn.inverse()).normalize();
-        let pos = *origin - rot * *at;
+        let rot = (bone_rot * p.turn.inverse()).normalize();
+        let pos = origin - rot * p.at;
         let (com, v, w) = (Vec3::from_array(s.position), Vec3::from_array(s.velocity), Vec3::from_array(s.angular_velocity));
-        parts[*k] = Some(PartState { pos, rot, vel: v + w.cross(pos - com), spin: w });
+        Ok(PartState { pos, rot, vel: v + w.cross(pos - com), spin: w })
+    };
+    let posed = |name: &str, own: bool| f.posed.iter().find(|p| p.own == own && p.bone.eq_ignore_ascii_case(name));
+    for (name, obj, origin) in objects {
+        if let Some(p) = posed(name, true) {
+            parts[p.part] = Some(from(p, *obj, *origin)?);
+        }
+    }
+    // The root without a bone object of its own: from a physics bone it carries (a rig whose root object is a bone
+    // above the pelvis).
+    for (name, obj, origin) in objects {
+        if let Some(p) = posed(name, false).filter(|p| parts[p.part].is_none() && p.part == 0) {
+            parts[0] = Some(from(p, *obj, *origin)?);
+        }
     }
     if parts[0].is_none() {
         return Err("the model's ragdoll has no pelvis object".into());
@@ -590,6 +851,12 @@ fn parts_from_model(f: &Fitted, objects: &[(String, *mut IPhysicsObject, Vec3)])
         if let (Some(pa), Some(pb)) = (parts[a], parts[b]) {
             let (x, y) = (rel(&pa, a, k), rel(&pb, b, k));
             parts[k] = Some(PartState { pos: x.pos.lerp(y.pos, t), rot: x.rot.slerp(y.rot, t).normalize(), vel: x.vel.lerp(y.vel, t), spin: x.spin.lerp(y.spin, t) });
+        }
+    }
+    // Parts with no own object nor neighbours on both sides: from the physics bones they carry.
+    for (name, obj, origin) in objects {
+        if let Some(p) = posed(name, false).filter(|p| parts[p.part].is_none()) {
+            parts[p.part] = Some(from(p, *obj, *origin)?);
         }
     }
     for k in 0..n {
@@ -813,13 +1080,13 @@ unsafe fn pose_model_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> 
         .map(|&o| unsafe { nm.body_state(o) }.ok_or("GetBodyState failed"))
         .collect::<Result<Vec<_>, _>>()?;
     unsafe { (api.createtable)(l, 0, f.posed.len() as c_int) };
-    for (name, k, at, turn) in &f.posed {
-        let s = states[*k];
+    for b in &f.posed {
+        let s = states[b.part];
         let (p, q) = (Vec3::from_array(s.position), Quat::from_array(s.rotation).normalize());
         let (v, w) = (Vec3::from_array(s.velocity), Vec3::from_array(s.angular_velocity));
-        let (pos, rot) = (p + q * *at, (q * *turn).normalize());
+        let (pos, rot) = (p + q * b.at, (q * b.turn).normalize());
         let [pitch, yaw, roll] = angles(rot);
-        let name = std::ffi::CString::new(name.as_str()).unwrap_or_default();
+        let name = std::ffi::CString::new(b.bone.as_str()).unwrap_or_default();
         unsafe {
             (api.createtable)(l, 0, 5);
             api.set_vector(l, c"pos", &(pos / M).to_array());
