@@ -10,18 +10,20 @@ mod render;
 mod rigfile;
 mod scene;
 mod sim;
+mod snap;
 
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
 usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphysics.dll>] [--model <models/...mdl>]
-                [--select <part>] [--tool <select|move|rotate|scale|all>] [--screenshot <file.png> [--sim <steps>]]
+                [--select <part>] [--snap] [--tool <select|move|rotate|scale|all>] [--screenshot <file.png> [--sim <steps>]]
   the rig editor: a model's NM rig made by the mouse, saved as garrysmod\\data\\dms\\skeletons\\<model>.json
   --gmod      Garry's Mod's folder (default: DMS_GMOD_DIR, else Steam's library from the registry)
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
   --vphysics  the fork's vphysics.dll (default: Garry's Mod's bin\\win64, else the repository's vphysics\\build)
   --model     a model to open at once
   --select    an NM part to select at once (Thigh_Left, Hand_Right, ...); --tool the gizmo's tool
+  --snap      lays every part on the model's bones and mesh at once (Snap all)
   --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
   --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
   --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)";
@@ -60,6 +62,7 @@ pub struct Options {
     pub screenshot: Option<(PathBuf, u64)>,
     pub select: Option<String>,
     pub tool: Option<String>,
+    pub snap: bool,
 }
 
 fn main() {
@@ -75,6 +78,7 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     }
+    let snap = args.iter().position(|a| a == "--snap").map(|i| args.remove(i)).is_some();
     let mut take = |flag: &str| {
         args.iter().position(|a| a == flag).map(|i| {
             let v = args.get(i + 1).cloned().unwrap_or_default();
@@ -129,7 +133,7 @@ fn run() -> Result<(), String> {
     let homer = load_homer(&game)?;
     println!("dms-rig: Garry's Mod at {}", gmod.display());
     let fs = gamefs::GameFs::open(&gmod)?;
-    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool };
+    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]).with_title("DMS rig editor"),
         depth_buffer: 24,

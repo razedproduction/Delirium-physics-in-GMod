@@ -33,6 +33,14 @@ reads models where the game has them (its VPKs, loose files, the Workshop's GMAs
   joint was clicked last. Ctrl snaps: moves to 1 cm, sizes to 5 mm, turns to 5°; Esc cancels a drag.
 - **Symmetry** (M): an edit of an arm's or a leg's part or joint is made on the other side too, across the model's plane
   between its hips: the joint's move mirrored, the size and mass copied, the part's placement its mirror image.
+- **Snap to bones** (B: the selected part; Shift+B: all): our own placement, not the fit's. Each vertex of the mesh goes
+  to the part of its main bone (firmly weighted vertices where a part has enough of them; an unmapped bone's to its
+  nearest mapped ancestor's part, the spine's by its segments). A long part (a limb's, a clavicle's, a foot's or hand's
+  box) is turned to lie along its bone from its joint to the next one (the feet and hands along their mesh's main axis),
+  its capsule from joint to joint as thick as the middle of its mesh around the bone; a round one (the pelvis, the spine,
+  the neck, the head) keeps its way and takes its piece of mesh: the spine's from the chest's slab between its joints,
+  as deep as the chest. The result is ordinary edits (sizes, the parts moved and turned on their bones): undo, symmetry
+  and the file as for any other; the masses stay.
 - **IK** (I): dragging a wrist's or an ankle's joint carries the elbow or knee (the shoulder or hip stays, the limb's
   lengths kept, bent as it was); dragging an elbow or a knee turns it about the limb's line.
 - **Numbers**: the selected part's joint offset (units), size (m), mass (kg), offset (m) and turn (degrees), editable
@@ -51,5 +59,5 @@ drag any part with the left button. Gravity is NM's 9.8 m/s² (what the body fee
 ## For scripts
 
 `--classify <text>` prints the class of every model whose path or source contains the text (no window);
-`--bones <model>` its bones; `--select <part>` and `--tool <name>` set the view up; `--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many
+`--bones <model>` its bones; `--select <part>` and `--tool <name>` set the view up, `--snap` snaps all the parts at once; `--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many
 physics steps) and quits.

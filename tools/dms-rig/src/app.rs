@@ -19,6 +19,7 @@ use crate::render::{Batch, Camera, Renderer, Scene, Shared, View};
 use crate::rigfile::{self, Rig};
 use crate::scene::{self, Hulls};
 use crate::sim::{self, Sim};
+use crate::snap::{self, shape_rot};
 use crate::{Homer, Options};
 
 /// A model open in the editor.
@@ -222,10 +223,15 @@ fn mirror_plane(m: &Model) -> Option<(Vec3, Vec3)> {
     (n != Vec3::ZERO).then_some(((l + r) * 0.5, n))
 }
 
-fn shape_rot(s: &Shape) -> Quat {
-    match *s {
-        Shape::Capsule { rot, .. } | Shape::Box { rot, .. } => rot,
-    }
+/// Part `k`'s placement on its bone (the edits' offset and turn) that puts its shape at `at` in the frame `want` (the
+/// shape's own axes), from the fit as it is with the part's edits `pe`.
+fn placement(f: &Fit, k: usize, pe: rigs::PartEdit, at: Vec3, want: Quat) -> (Vec3, Vec3) {
+    // The part's frame without its placement.
+    let t_rot = f.shown[k].rotation * scene::from_angles(pe.turn).inverse();
+    let t_pos = f.shown[k].translation - t_rot * pe.offset;
+    let turn = scene::angles((t_rot.inverse() * want * shape_rot(&f.body.parts[k].shape).inverse()).normalize());
+    // Rounded to a hundredth of a degree: the file's text stays short.
+    (t_rot.inverse() * (at - t_pos), (turn * 100.0).round() / 100.0)
 }
 
 /// The limbs' edits changed since `before` copied to their other sides, mirrored across the model's plane: joints'
@@ -276,12 +282,8 @@ fn mirror(homer: &Homer, m: &mut Model, before: &Rig) {
             let src = Mat3::from_quat(f.shown[from].rotation * shape_rot(&f.body.parts[from].shape));
             let want = Quat::from_mat3(&(s * src * Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0)))).normalize();
             let at = o + flip(f.shown[from].translation - o);
-            // The other side's frame without its placement.
-            let pe = m.rig.edits.parts[to];
-            let t_rot = f.shown[to].rotation * scene::from_angles(pe.turn).inverse();
-            let t_pos = f.shown[to].translation - t_rot * pe.offset;
-            let turn = scene::angles((t_rot.inverse() * want * shape_rot(&f.body.parts[to].shape).inverse()).normalize());
-            (to, t_rot.inverse() * (at - t_pos), (turn * 100.0).round() / 100.0)
+            let (offset, turn) = placement(f, to, m.rig.edits.parts[to], at, want);
+            (to, offset, turn)
         })
         .collect();
     for (to, offset, turn) in set {
@@ -363,6 +365,10 @@ impl App {
         if let Some(m) = app.opts.model.clone() {
             app.open(&m);
             app.sel = app.opts.select.as_ref().and_then(|s| PARTS.iter().position(|p| p.eq_ignore_ascii_case(s)));
+            if app.opts.snap {
+                app.snap((0..21).collect());
+                println!("dms-rig: {}", app.status);
+            }
             if app.shot.as_ref().is_some_and(|s| s.1 > 0) {
                 app.tab = Tab::Sim;
                 app.start_sim();
@@ -469,6 +475,52 @@ impl App {
             to.push(std::mem::replace(&mut m.rig, r));
             refit(&self.homer, m);
         }
+    }
+
+    /// The parts laid on the model's bones and mesh by our own placement (`snap`): their sizes, then where they lie on
+    /// their bones; one undo step, mirrored when symmetric.
+    fn snap(&mut self, parts: Vec<usize>) {
+        let Some(m) = &mut self.cur else { return };
+        let (Some(mesh), Ok(f)) = (&m.mesh, &m.fit) else {
+            self.status = "snap: needs the model's mesh and a fitted body".into();
+            return;
+        };
+        let ts = snap::targets(&m.skel, mesh, &m.map(), f, &parts);        let before = m.rig.clone();
+        for t in &ts {
+            let pe = &mut m.rig.edits.parts[t.k];
+            let round = |v: f32| (v * 1e4).round() / 1e4;
+            match t.shape {
+                Shape::Capsule { radius, half, .. } => {
+                    pe.radius = Some(round(radius));
+                    pe.half = Some(round(half));
+                }
+                Shape::Box { half, .. } => pe.boxed = Some(half.to_array().map(round).into()),
+            }
+        }
+        refit(&self.homer, m);
+        if let Ok(f) = &m.fit {
+            let set: Vec<(usize, Vec3, Vec3)> = ts
+                .iter()
+                .map(|t| {
+                    let (offset, turn) = placement(f, t.k, m.rig.edits.parts[t.k], t.centre, t.frame);
+                    (t.k, offset, turn)
+                })
+                .collect();
+            for (k, offset, turn) in set {
+                m.rig.edits.parts[k].offset = offset;
+                m.rig.edits.parts[k].turn = turn;
+            }
+        }
+        refit(&self.homer, m);
+        if self.symmetry && parts.len() == 1 {
+            mirror(&self.homer, m, &before);
+        }
+        if m.rig != before {
+            m.undo.push(before);
+            m.redo.clear();
+        }
+        let left = parts.len() - ts.len();
+        self.status = format!("{} part(s) laid on the bones{}", ts.len(), if left > 0 { format!("; {left} with too little mesh of their own kept") } else { String::new() });
     }
 
     /// Part `k`'s bone set (`None`: none); the mapping kept only where it differs from the model's own.
@@ -1463,6 +1515,13 @@ impl eframe::App for App {
                     }
                 }
             });
+            let (one, all) = ctx.input(|i| (i.modifiers.is_none() && i.key_pressed(egui::Key::B), i.modifiers.matches_exact(egui::Modifiers::SHIFT) && i.key_pressed(egui::Key::B)));
+            if one && let Some(k) = self.sel {
+                self.snap(vec![k]);
+            }
+            if all {
+                self.snap((0..21).collect());
+            }
         }
         // The physics: real time, or the screenshot's steps at the game's pace a frame.
         if self.tab == Tab::Sim
@@ -1508,6 +1567,16 @@ impl eframe::App for App {
                     ui.separator();
                     ui.toggle_value(&mut self.symmetry, "Symmetry (M)").on_hover_text("a limb's edit is mirrored on the other side, across the model's plane between its hips");
                     ui.toggle_value(&mut self.ik, "IK (I)").on_hover_text("dragging a wrist or ankle joint carries the elbow or knee, the limb's lengths kept; an elbow or knee turns about the limb's line");
+                    ui.separator();
+                    const SNAP: &str = "lay the part on the model: along its bone from its joint to the next (the pelvis, feet, hands and head along their mesh), as thick and long as the mesh its bones carry";
+                    if ui.add_enabled(self.sel.is_some(), egui::Button::new("Snap to bones (B)")).on_hover_text(SNAP).clicked()
+                        && let Some(k) = self.sel
+                    {
+                        self.snap(vec![k]);
+                    }
+                    if ui.button("Snap all (Shift+B)").on_hover_text(SNAP).clicked() {
+                        self.snap((0..21).collect());
+                    }
                 });
             }
         });
