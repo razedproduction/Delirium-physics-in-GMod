@@ -7,6 +7,7 @@ mod app;
 mod gamefs;
 mod mesh;
 mod render;
+mod report;
 mod rigfile;
 mod scene;
 mod sim;
@@ -16,17 +17,24 @@ use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
 usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphysics.dll>] [--model <models/...mdl>]
-                [--select <part>] [--snap] [--tool <select|move|rotate|scale|all>] [--screenshot <file.png> [--sim <steps>]]
+                [--select <part>] [--snap] [--tool <select|move|rotate|scale|all>] [--yaw <degrees>]
+                [--screenshot <file.png> [--sim <steps>]]
   the rig editor: a model's NM rig made by the mouse, saved as garrysmod\\data\\dms\\skeletons\\<model>.json
   --gmod      Garry's Mod's folder (default: DMS_GMOD_DIR, else Steam's library from the registry)
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
   --vphysics  the fork's vphysics.dll (default: Garry's Mod's bin\\win64, else the repository's vphysics\\build)
   --model     a model to open at once
   --select    an NM part to select at once (Thigh_Left, Hand_Right, ...); --tool the gizmo's tool
+  --yaw       the view turned round the model at once (degrees; 0: its front)
   --snap      lays every part on the model's bones and mesh at once (Snap all)
   --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
   --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
-  --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)";
+  --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)
+  --snap-report <text[,text...]> [--plain] [--verbose] [--sim <steps>]
+                     snaps every complete humanoid whose path has a <text> and scores its parts against their bones
+                     and mesh (docs/rig-editor.md): the faults past the bounds; --plain scores the plain fit instead,
+                     --verbose prints every part's scores, --sim drops each body on the fork and checks it settles
+                     whole; exits 1 when any model has faults";
 
 /// Homer from the player's GTA IV as the module loads him (`module/src/data.rs`): his build and body, NM's surfaces.
 pub struct Homer {
@@ -63,6 +71,8 @@ pub struct Options {
     pub select: Option<String>,
     pub tool: Option<String>,
     pub snap: bool,
+    /// The view's yaw at once (degrees; 0 looks at the model's front).
+    pub yaw: Option<f32>,
 }
 
 fn main() {
@@ -78,7 +88,8 @@ fn run() -> Result<(), String> {
         println!("{USAGE}");
         return Ok(());
     }
-    let snap = args.iter().position(|a| a == "--snap").map(|i| args.remove(i)).is_some();
+    let mut flag = |f: &str| args.iter().position(|a| a == f).map(|i| args.remove(i)).is_some();
+    let (snap, plain, verbose) = (flag("--snap"), flag("--plain"), flag("--verbose"));
     let mut take = |flag: &str| {
         args.iter().position(|a| a == flag).map(|i| {
             let v = args.get(i + 1).cloned().unwrap_or_default();
@@ -103,6 +114,8 @@ fn run() -> Result<(), String> {
     let shot = take("--screenshot").map(PathBuf::from);
     let classify = take("--classify");
     let bones = take("--bones");
+    let report = take("--snap-report");
+    let yaw = take("--yaw").map(|s| s.parse::<f32>().map_err(|e| format!("--yaw {s}: {e}"))).transpose()?;
     let steps = take("--sim").map(|s| s.parse::<u64>().map_err(|e| format!("--sim {s}: {e}"))).transpose()?;
     if !args.is_empty() {
         return Err(format!("unknown arguments {args:?}\n{USAGE}"));
@@ -133,7 +146,19 @@ fn run() -> Result<(), String> {
     let homer = load_homer(&game)?;
     println!("dms-rig: Garry's Mod at {}", gmod.display());
     let fs = gamefs::GameFs::open(&gmod)?;
-    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap };
+    if let Some(filters) = report {
+        // --sim: each body dropped on the fork.
+        let sim = match steps {
+            Some(n) if n > 0 => {
+                let dll = vphysics.clone().or_else(|| sim::find_vphysics(&gmod, repo.as_deref()).into_iter().next()).ok_or("--sim: no vphysics.dll of the fork")?;
+                Some((sim::Sim::new(&dll, &gmod.join("bin").join("win64"), &fs.surface_scripts(), "concrete", homer.concrete)?, n))
+            }
+            _ => None,
+        };
+        let bad = report::run(&homer, &fs, &filters, plain, verbose, sim);
+        return if bad == 0 { Ok(()) } else { Err(format!("{bad} model(s) with faults")) };
+    }
+    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap, yaw };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]).with_title("DMS rig editor"),
         depth_buffer: 24,
