@@ -60,3 +60,14 @@ over the model, writes the file the addon already reloads, and simulates the bod
   checksum) still opens: bones are matched by name.
 - A model without a bone for a required part (HL2's stalker and skeleton have no hands, the poison zombie no head)
   can't get a rig in the editor either: the fit needs a bone per required joint.
+- The fit's feet and hands follow their own bones (`dms-fit`, `turn_leaves`). The fit builds NM's body in Homer's
+  stance (ADR 0027) and turns each part back onto the model's bind pose by its segment; the feet and hands have no child
+  joint in NM, so they used to take their shin's or forearm's turn and kept Homer's ankle and wrist: on male_07 a foot
+  pointed 27–34° off its toes (level), a hand 6–9° off its fingers. Now each is turned on from its parent's turn round
+  to its own bones' way (the farthest bone below: the toes, the fingers; a foot's level, its pitch stays its shin's) as
+  the fitted part goes from its joint to its centre: 0.2–2.9° and 0°. Only how the model's bones sit on the parts
+  changes (`Posed`, the editor's `shown`): the build, the frames, the masses and the joints are as before
+  (`golden body --fit` OK). A rig's hand and foot placement edits are now relative to the new frames.
+- The editor's Snap (B, Shift+B) is our own placement, not the fit's: from the plain fit, the long parts laid along the
+  model's bones at Homer's length and centred in the mesh, thickness Homer's times one factor per group from the mesh
+  (docs/rig-editor.md).

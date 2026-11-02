@@ -125,8 +125,31 @@ pub fn bind_report(s: &Skeleton, m: &rigs::Map) -> (bool, Vec<String>) {
     (broken, out)
 }
 
-/// Each part's segment: from its joint to this child's (the leaves, feet, hands and head, turn with their parent).
+/// Each part's segment: from its joint to this child's (the head turns with its parent; the feet and hands with theirs,
+/// then on to their own bones, [`LEAVES`]).
 const SEGMENT: [(usize, usize); 15] = [(1, 2), (2, 3), (4, 5), (5, 6), (7, 8), (8, 9), (9, 10), (10, 11), (11, 12), (13, 14), (14, 15), (15, 16), (17, 18), (18, 19), (19, 20)];
+
+/// The feet and hands: no child joint in NM, so their way is their own bones' (the farthest bone below, a foot's toes, a
+/// hand's fingers) against the fitted part's from its joint to its centre; a foot's level (its pitch is its shin's).
+const LEAVES: [usize; 4] = [3, 6, 16, 20];
+const FEET: [usize; 2] = [3, 6];
+
+/// The way (m) from a bone to its farthest bone below in the pose `at` (units), `None` with none half a unit off.
+fn farthest(s: &Skeleton, b: usize, at: &[(Vec3, Quat)]) -> Option<Vec3> {
+    let below = |mut c: usize| loop {
+        match s.bones[c].parent {
+            Some(p) if p == b => break true,
+            Some(p) => c = p,
+            None => break false,
+        }
+    };
+    (0..s.bones.len())
+        .filter(|&c| below(c))
+        .map(|c| at[c].0 - at[b].0)
+        .max_by(|x, y| x.length().total_cmp(&y.length()))
+        .filter(|w| w.length() > 0.5)
+        .map(|w| w * M)
+}
 
 /// Homer's 21 joints as he stands (his build's frames): each part's pivot on its parent, the root's centre.
 fn homer_joints(body: &Body) -> Vec<Vec3> {
@@ -138,7 +161,8 @@ fn homer_joints(body: &Body) -> Vec<Vec3> {
 /// The model's joints (`bind`, its reference pose) put in Homer's stance (ROADMAP M10): each segment keeps the model's
 /// length and takes the way Homer's goes, turned to the model's facing (its hips' line). NM's standing frames are what
 /// it holds as the body's neutral, so a body fitted to ValveBiped's reference pose stood with its arms out and its head
-/// forward. Also each part's turn from the reference pose to the stance, for the model's bones.
+/// forward. Also each part's turn from the reference pose to the stance, for the model's bones (the leaves' their
+/// parents', then [`turn_leaves`]).
 fn repose(body: &Body, bind: &[Vec3; 21]) -> ([Vec3; 21], [Quat; 21]) {
     let h = homer_joints(body);
     let flat = |v: Vec3| v.with_z(0.0).normalize_or(Vec3::X);
@@ -163,6 +187,19 @@ fn repose(body: &Body, bind: &[Vec3; 21]) -> ([Vec3; 21], [Quat; 21]) {
         };
     }
     (at, turn)
+}
+
+/// The feet's and hands' turns on from their parents' round to their own bones' ways (`leaves`, the model's bind) as
+/// the fitted parts go from their joints (`joints`) to their centres (`frames`).
+fn turn_leaves(turn: &mut [Quat; 21], body: &Body, leaves: &[Option<Vec3>; 21], frames: &[Transform], joints: &[Vec3; 21]) {
+    for k in LEAVES {
+        let (Some(w), Some(p)) = (leaves[k], body.parts[k].parent) else { continue };
+        let level = |v: Vec3| if FEET.contains(&k) { v.with_z(0.0) } else { v };
+        let (a, b) = (level(turn[p] * w).normalize_or_zero(), level(frames[k].translation - joints[k]).normalize_or_zero());
+        if a != Vec3::ZERO && b != Vec3::ZERO {
+            turn[k] = (Quat::from_rotation_arc(a, b) * turn[p]).normalize();
+        }
+    }
 }
 
 /// Homer's build (`homer`, its body `homer_body`) fitted to a humanoid skeleton (`Build::fit` on Homer's standing
@@ -190,9 +227,11 @@ pub fn fit(homer: &Build, homer_body: &Body, s: &Skeleton, model: &str, names: O
             *j += *o * M;
         }
     }
-    let (joints, turn) = repose(homer_body, &bind);
+    let leaves: [Option<Vec3>; 21] = std::array::from_fn(|k| class.map[k].filter(|_| LEAVES.contains(&k)).and_then(|b| farthest(s, b, &at)));
+    let (joints, mut turn) = repose(homer_body, &bind);
     let frames: Vec<Transform> = homer_body.parts.iter().map(|p| Transform::from_translation(p.pos).with_rotation(p.rot)).collect();
     let (mut build, frames) = homer.fit(&frames, &joints);
+    turn_leaves(&mut turn, homer_body, &leaves, &frames, &joints);
     let mut body = Body::new(&build, &frames);
     if let Some(e) = edits.filter(|e| e.sizes() || e.masses()) {
         rigs::apply_sizes(&mut build, e);
