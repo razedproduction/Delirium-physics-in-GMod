@@ -62,15 +62,82 @@ fn refit(homer: &Homer, m: &mut Model) {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Handle {
+    /// A joint's dot: dragged on the screen's plane.
     Joint(usize),
     Radius(usize),
     Half(usize, f32),
-    BoxAxis(usize, usize),
-    Move(usize),
+    BoxAxis(usize, usize, f32),
+    /// The move gizmo's centre: on the screen's plane.
+    Free(usize),
+    /// A move arrow.
+    Axis(usize, usize),
+    /// A turn ring; 3 turns about the view's axis.
     Ring(usize, usize),
     Bone(usize),
     Part(usize),
 }
+
+/// The gizmo the selected part shows.
+#[derive(Clone, Copy, PartialEq)]
+enum Tool {
+    Select,
+    Move,
+    Rotate,
+    Scale,
+    All,
+}
+
+impl Tool {
+    const ALL: [(Tool, &'static str, egui::Key, &'static str); 5] = [
+        (Tool::Select, "Select", egui::Key::Q, "Q: select only; joints still drag"),
+        (Tool::Move, "Move", egui::Key::W, "W: arrows along the axes, the centre on the screen's plane"),
+        (Tool::Rotate, "Rotate", egui::Key::E, "E: rings about the axes, the outer one about the view"),
+        (Tool::Scale, "Scale", egui::Key::R, "R: the capsule's radius and length, the box's extents"),
+        (Tool::All, "All", egui::Key::T, "T: move, rotate and scale at once"),
+    ];
+
+    fn moves(self) -> bool {
+        matches!(self, Tool::Move | Tool::All)
+    }
+
+    fn turns(self) -> bool {
+        matches!(self, Tool::Rotate | Tool::All)
+    }
+
+    fn scales(self) -> bool {
+        matches!(self, Tool::Scale | Tool::All)
+    }
+}
+
+/// The gizmo's axes.
+#[derive(Clone, Copy, PartialEq)]
+enum Space {
+    /// The part's own: a capsule's Y is its length, along its bone.
+    Part,
+    /// The model's bone mapped to the part (the part's own for the spread spine).
+    Bone,
+    World,
+}
+
+/// The selected part's gizmo: where its handles stand and along what.
+struct Gizmo {
+    k: usize,
+    /// The move handles move the joint (else the part on its bone).
+    joint: bool,
+    /// The move handles' centre.
+    at: Vec3,
+    /// The rings' centre: the part's, or its joint's.
+    pivot: Vec3,
+    axes: [Vec3; 3],
+    /// The arrows' length and the rings' radius (m), the same on the screen at any distance.
+    arrow: f32,
+    ring: f32,
+}
+
+const ARROW_PX: f32 = 95.0;
+const RING_PX: f32 = 70.0;
+const AXIS_COLORS: [Color32; 3] = [Color32::from_rgb(235, 70, 70), Color32::from_rgb(80, 210, 80), Color32::from_rgb(80, 120, 255)];
+const HOT: Color32 = Color32::from_rgb(255, 230, 60);
 
 /// A drag in progress: what, from where, and the values it started from.
 struct Drag {
@@ -81,6 +148,11 @@ struct Drag {
     dir: Vec3,
     point0: Vec3,
     start: Vec3,
+    /// The move acts on the joint.
+    joint: bool,
+    /// The joints as the drag started (m), for IK.
+    joints0: Vec<Vec3>,
+    ik: bool,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -121,9 +193,125 @@ pub struct App {
     version: u64,
     /// A number being dragged in the panel has pushed its undo step.
     number_drag: bool,
+    tool: Tool,
+    space: Space,
+    /// The rings turn the part about its joint (else its centre).
+    pivot_joint: bool,
+    /// The joint was clicked last: the move gizmo moves it.
+    target_joint: bool,
+    /// An edit of a limb's part or joint is mirrored on the other side.
+    symmetry: bool,
+    /// A hand's or foot's joint dragged carries its elbow or knee (the limb's lengths kept); an elbow or knee turns
+    /// about its limb's line.
+    ik: bool,
 }
 
 const HANDLE_PX: f32 = 7.0;
+
+/// The limbs' parts, left and right.
+const PAIRS: [(usize, usize); 7] = [(1, 4), (2, 5), (3, 6), (13, 17), (14, 18), (15, 19), (16, 20)];
+/// The limbs' joints: the hip or shoulder, the knee or elbow, the ankle or wrist.
+const LIMBS: [[usize; 3]; 4] = [[1, 2, 3], [4, 5, 6], [14, 15, 16], [18, 19, 20]];
+
+/// The model's plane of symmetry: through the middle of its hips, across their line (kept upright).
+fn mirror_plane(m: &Model) -> Option<(Vec3, Vec3)> {
+    let map = m.map();
+    let at = |k: usize| map[k].as_ref().and_then(|n| m.skel.bones.iter().find(|b| &b.name == n)).map(|b| b.bind.0 * M);
+    let (l, r) = (at(1)?, at(4)?);
+    let n = Vec3::new(l.x - r.x, l.y - r.y, 0.0).normalize_or_zero();
+    (n != Vec3::ZERO).then_some(((l + r) * 0.5, n))
+}
+
+fn shape_rot(s: &Shape) -> Quat {
+    match *s {
+        Shape::Capsule { rot, .. } | Shape::Box { rot, .. } => rot,
+    }
+}
+
+/// The limbs' edits changed since `before` copied to their other sides, mirrored across the model's plane: joints'
+/// moves, sizes and masses as they are, the parts' placement as the other side's mirror image.
+fn mirror(homer: &Homer, m: &mut Model, before: &Rig) {
+    let Some((o, n)) = mirror_plane(m) else { return };
+    let flip = |v: Vec3| v - 2.0 * n * n.dot(v);
+    let mut placed = vec![];
+    let mut any = false;
+    for (a, b) in PAIRS {
+        let changed = |k: usize| m.rig.edits.parts[k] != before.edits.parts[k] || m.rig.edits.joints[k] != before.edits.joints[k];
+        let (from, to) = if changed(a) { (a, b) } else if changed(b) { (b, a) } else { continue };
+        any = true;
+        let (e0, e1) = (before.edits.parts[from], m.rig.edits.parts[from]);
+        if m.rig.edits.joints[from] != before.edits.joints[from] {
+            m.rig.edits.joints[to] = flip(m.rig.edits.joints[from]);
+        }
+        let t = &mut m.rig.edits.parts[to];
+        if e1.radius != e0.radius {
+            t.radius = e1.radius;
+        }
+        if e1.half != e0.half {
+            t.half = e1.half;
+        }
+        if e1.boxed != e0.boxed {
+            t.boxed = e1.boxed;
+        }
+        if e1.mass != e0.mass {
+            t.mass = e1.mass;
+        }
+        if e1.offset != e0.offset || e1.turn != e0.turn {
+            placed.push((from, to));
+        }
+    }
+    if !any {
+        return;
+    }
+    refit(homer, m);
+    if placed.is_empty() {
+        return;
+    }
+    let Ok(f) = &m.fit else { return };
+    let s = Mat3::IDENTITY - 2.0 * Mat3::from_cols(n * n.x, n * n.y, n * n.z);
+    let set: Vec<(usize, Vec3, Vec3)> = placed
+        .into_iter()
+        .map(|(from, to)| {
+            // The mirror image's frame: reflected, then its own X flipped back (a capsule's and a box's shape keep).
+            let src = Mat3::from_quat(f.shown[from].rotation * shape_rot(&f.body.parts[from].shape));
+            let want = Quat::from_mat3(&(s * src * Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0)))).normalize();
+            let at = o + flip(f.shown[from].translation - o);
+            // The other side's frame without its placement.
+            let pe = m.rig.edits.parts[to];
+            let t_rot = f.shown[to].rotation * scene::from_angles(pe.turn).inverse();
+            let t_pos = f.shown[to].translation - t_rot * pe.offset;
+            let turn = scene::angles((t_rot.inverse() * want * shape_rot(&f.body.parts[to].shape).inverse()).normalize());
+            (to, t_rot.inverse() * (at - t_pos), (turn * 100.0).round() / 100.0)
+        })
+        .collect();
+    for (to, offset, turn) in set {
+        m.rig.edits.parts[to].offset = offset;
+        m.rig.edits.parts[to].turn = turn;
+    }
+    refit(homer, m);
+}
+
+/// Two-bone IK: the limb's joints with its end at `want`, its root kept, its lengths kept, bent the way it was.
+fn reach(root: Vec3, mid: Vec3, end: Vec3, want: Vec3) -> (Vec3, Vec3) {
+    let (l1, l2) = (mid.distance(root), end.distance(mid));
+    let d = want - root;
+    let dist = d.length().clamp((l1 - l2).abs() + 1e-4, l1 + l2 - 1e-4);
+    let u = d.normalize_or(Vec3::Z);
+    let pole = mid - root;
+    let b = (pole - u * pole.dot(u)).normalize_or(u.any_orthonormal_vector());
+    let c = ((l1 * l1 + dist * dist - l2 * l2) / (2.0 * l1 * dist)).clamp(-1.0, 1.0);
+    (root + u * (l1 * c) + b * (l1 * (1.0 - c * c).sqrt()), root + u * dist)
+}
+
+/// The middle joint turned about the limb's line toward `want`, its lengths kept.
+fn swing(root: Vec3, mid: Vec3, end: Vec3, want: Vec3) -> Vec3 {
+    let e = (end - root).normalize_or(Vec3::Z);
+    let c = root + e * (mid - root).dot(e);
+    let r = (mid - c).length();
+    let w = want - c;
+    let dir = (w - e * w.dot(e)).normalize_or(mid - c);
+    c + dir.normalize_or(Vec3::X) * r
+}
 
 impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>, homer: Homer, fs: GameFs, opts: Options) -> App {
@@ -159,12 +347,22 @@ impl App {
             last: std::time::Instant::now(),
             version: 0,
             number_drag: false,
+            tool: Tool::All,
+            space: Space::Part,
+            pivot_joint: false,
+            target_joint: false,
+            symmetry: false,
+            ik: false,
             fs,
         };
         app.status = format!("{} models; {} sources{}", app.models.len(), app.fs.sources.len(),
             if app.fs.problems.is_empty() { String::new() } else { format!("; {} unreadable (first: {})", app.fs.problems.len(), app.fs.problems[0]) });
+        if let Some(t) = &app.opts.tool {
+            app.tool = Tool::ALL.iter().find(|x| x.1.eq_ignore_ascii_case(t)).map_or(app.tool, |x| x.0);
+        }
         if let Some(m) = app.opts.model.clone() {
             app.open(&m);
+            app.sel = app.opts.select.as_ref().and_then(|s| PARTS.iter().position(|p| p.eq_ignore_ascii_case(s)));
             if app.shot.as_ref().is_some_and(|s| s.1 > 0) {
                 app.tab = Tab::Sim;
                 app.start_sim();
@@ -360,7 +558,25 @@ impl App {
 
     // ---- the 3D view -------------------------------------------------------------------------------------------
 
-    /// The selected part's handles: (handle, where, for rings the axis).
+    /// The selected part's gizmo, in the chosen axes.
+    fn gizmo(&self, view: &View) -> Option<Gizmo> {
+        let k = self.sel?;
+        let m = self.cur.as_ref()?;
+        let f = m.fit.as_ref().ok()?;
+        let s = f.shown[k];
+        let own = s.rotation * shape_rot(&f.body.parts[k].shape);
+        let q = match self.space {
+            Space::World => Quat::IDENTITY,
+            Space::Bone => m.map()[k].as_ref().and_then(|n| m.skel.bones.iter().find(|b| &b.name == n)).map_or(own, |b| b.bind.1),
+            Space::Part => own,
+        };
+        let joint = self.target_joint;
+        let at = if joint { f.shown_joints[k] } else { s.translation };
+        let pivot = if self.pivot_joint { f.shown_joints[k] } else { s.translation };
+        Some(Gizmo { k, joint, at, pivot, axes: Vec3::AXES.map(|a| (q * a).normalize()), arrow: ARROW_PX * view.pixel(at), ring: RING_PX * view.pixel(pivot) })
+    }
+
+    /// The handles drawn as points: the joints, the tool's scale handles, the move centre and the arrows' tips.
     fn handles(&self, view: &View) -> Vec<(Handle, Vec3)> {
         let mut out = vec![];
         let Some(m) = &self.cur else { return out };
@@ -368,7 +584,9 @@ impl App {
         for (k, j) in f.shown_joints.iter().enumerate() {
             out.push((Handle::Joint(k), *j));
         }
-        if let Some(k) = self.sel {
+        let Some(g) = self.gizmo(view) else { return out };
+        let k = g.k;
+        if self.tool.scales() {
             let s = f.shown[k];
             let c = s.translation;
             match f.body.parts[k].shape {
@@ -381,29 +599,33 @@ impl App {
                 }
                 Shape::Box { rot, half } => {
                     for i in 0..3 {
-                        out.push((Handle::BoxAxis(k, i), c + s.rotation * rot * (Vec3::AXES[i] * half[i])));
+                        for sign in [1.0, -1.0] {
+                            out.push((Handle::BoxAxis(k, i, sign), c + s.rotation * rot * (Vec3::AXES[i] * half[i] * sign)));
+                        }
                     }
                 }
             }
-            out.push((Handle::Move(k), c));
+        }
+        if self.tool.moves() {
+            out.push((Handle::Free(k), g.at));
+            for i in 0..3 {
+                out.push((Handle::Axis(k, i), g.at + g.axes[i] * g.arrow));
+            }
         }
         out
     }
 
-    fn ring_radius(f: &Fit, k: usize) -> f32 {
-        match f.body.parts[k].shape {
-            Shape::Capsule { radius, half, .. } => (radius + half) * 1.25 + 0.03,
-            Shape::Box { half, .. } => half.max_element() * 1.6 + 0.03,
-        }
-    }
-
-    fn ring_points(c: Vec3, axis: Vec3, r: f32) -> Vec<Vec3> {
+    /// Ring `i` of the gizmo on the screen (3: about the view's axis, a little wider).
+    fn ring(view: &View, g: &Gizmo, i: usize) -> Vec<Pos2> {
+        let (axis, r) = if i < 3 { (g.axes[i], g.ring) } else { ((view.eye - g.pivot).normalize_or(Vec3::Z), g.ring * 1.2) };
         let u = axis.any_orthonormal_vector();
         let v = axis.cross(u);
-        (0..=48).map(|i| {
-            let a = i as f32 / 48.0 * std::f32::consts::TAU;
-            c + (u * a.cos() + v * a.sin()) * r
-        }).collect()
+        (0..=64)
+            .filter_map(|n| {
+                let a = n as f32 / 64.0 * std::f32::consts::TAU;
+                view.project(g.pivot + (u * a.cos() + v * a.sin()) * r)
+            })
+            .collect()
     }
 
     /// What's under the mouse in the rig tab.
@@ -419,16 +641,29 @@ impl App {
                 .map(|x| Handle::Bone(x.0));
         }
         let hs = self.handles(view);
-        // The selected part's own handles over the joints.
+        // The gizmo over the joints: its points, its arrows' shafts, its rings (the nearest).
         if let Some(h) = hs.iter().filter(|h| !matches!(h.0, Handle::Joint(_))).find(|h| near(h.1, HANDLE_PX + 2.0)) {
             return Some(h.0);
         }
-        if let (Some(k), Ok(f)) = (self.sel, &m.fit) {
-            let s = f.shown[k];
-            for i in 0..3 {
-                let pts: Vec<Pos2> = Self::ring_points(s.translation, s.rotation * Vec3::AXES[i], Self::ring_radius(f, k)).into_iter().filter_map(|p| view.project(p)).collect();
-                if pts.windows(2).any(|w| seg_dist(at, w[0], w[1]) < 5.0) {
-                    return Some(Handle::Ring(k, i));
+        if let Some(g) = self.gizmo(view) {
+            if self.tool.moves()
+                && let Some(c) = view.project(g.at)
+            {
+                for i in 0..3 {
+                    if let Some(t) = view.project(g.at + g.axes[i] * g.arrow)
+                        && seg_dist(at, c, t) < 5.0
+                    {
+                        return Some(Handle::Axis(g.k, i));
+                    }
+                }
+            }
+            if self.tool.turns() {
+                let best = (0..4)
+                    .filter_map(|i| Self::ring(view, &g, i).windows(2).map(|w| seg_dist(at, w[0], w[1])).min_by(f32::total_cmp).map(|d| (i, d)))
+                    .filter(|x| x.1 < 5.0)
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((i, _)) = best {
+                    return Some(Handle::Ring(g.k, i));
                 }
             }
         }
@@ -458,45 +693,69 @@ impl App {
         let Some(m) = &self.cur else { return };
         let Ok(f) = &m.fit else { return };
         let k = match h {
-            Handle::Joint(k) | Handle::Radius(k) | Handle::Half(k, _) | Handle::BoxAxis(k, _) | Handle::Move(k) | Handle::Ring(k, _) => k,
+            Handle::Joint(k) | Handle::Radius(k) | Handle::Half(k, _) | Handle::BoxAxis(k, _, _) | Handle::Free(k) | Handle::Axis(k, _) | Handle::Ring(k, _) => k,
             _ => return,
         };
+        let g = self.gizmo(view);
         let s = f.shown[k];
         let p = &f.body.parts[k];
         let pe = m.rig.edits.parts[k];
-        let (dir, point0, start) = match (h, p.shape) {
-            (Handle::Joint(_), _) => (Vec3::ZERO, f.shown_joints[k], m.rig.edits.joints[k]),
-            (Handle::Radius(_), Shape::Capsule { rot, radius, .. }) => {
+        let moved = matches!(h, Handle::Free(_) | Handle::Axis(..));
+        let joint = matches!(h, Handle::Joint(_)) || (moved && g.as_ref().is_some_and(|g| g.joint));
+        let (dir, point0, start) = match (h, p.shape, g) {
+            (Handle::Joint(_), _, _) => (Vec3::ZERO, f.shown_joints[k], m.rig.edits.joints[k]),
+            (Handle::Radius(_), Shape::Capsule { rot, radius, .. }, _) => {
                 let axis = s.rotation * rot * Vec3::Y;
                 (axis.cross(view.eye - s.translation).normalize_or(Vec3::Z), s.translation, Vec3::splat(radius))
             }
-            (Handle::Half(_, sign), Shape::Capsule { rot, half, .. }) => (s.rotation * rot * Vec3::Y * sign, s.translation, Vec3::splat(half)),
-            (Handle::BoxAxis(_, i), Shape::Box { rot, half }) => (s.rotation * rot * Vec3::AXES[i], s.translation, half),
-            (Handle::Move(_), _) => (Vec3::ZERO, s.translation, pe.offset),
-            (Handle::Ring(_, i), _) => (s.rotation * Vec3::AXES[i], s.translation, pe.turn),
+            (Handle::Half(_, sign), Shape::Capsule { rot, half, .. }, _) => (s.rotation * rot * Vec3::Y * sign, s.translation, Vec3::splat(half)),
+            (Handle::BoxAxis(_, i, sign), Shape::Box { rot, half }, _) => (s.rotation * rot * Vec3::AXES[i] * sign, s.translation, half),
+            (Handle::Free(_) | Handle::Axis(..), _, Some(g)) => {
+                let dir = if let Handle::Axis(_, i) = h { g.axes[i] } else { Vec3::ZERO };
+                (dir, g.at, if joint { m.rig.edits.joints[k] } else { pe.offset })
+            }
+            (Handle::Ring(_, i), _, Some(g)) => (if i < 3 { g.axes[i] } else { (view.eye - g.pivot).normalize_or(Vec3::Z) }, g.pivot, pe.turn),
             _ => return,
         };
-        self.drag = Some(Drag { handle: h, press, rig0: m.rig.clone(), shown0: s, dir, point0, start });
+        let joints0 = f.shown_joints.clone();
+        self.drag = Some(Drag { handle: h, press, rig0: m.rig.clone(), shown0: s, dir, point0, start, joint, joints0, ik: self.ik });
     }
 
-    fn drag_to(&mut self, view: &View, at: Pos2) {
+    /// The drag at `at`; `snap` (Ctrl) rounds moves to 1 cm, sizes to 5 mm, turns to 5°.
+    fn drag_to(&mut self, view: &View, at: Pos2, snap: bool) {
         let (Some(d), Some(m)) = (&self.drag, &mut self.cur) else { return };
+        let before = m.rig.clone();
         let total = at - d.press;
         let r = &mut m.rig;
+        let snapped = |v: f32, step: f32| if snap { (v / step).round() * step } else { v };
+        // The part's frame without its placement (its offset and turn are in it).
+        let frame = |k: usize| d.shown0.rotation * scene::from_angles(d.rig0.edits.parts[k].turn).inverse();
+        let mut by = None;
         match d.handle {
-            Handle::Joint(k) => r.edits.joints[k] = d.start + (view.on_plane(at, d.point0) - d.point0) / M,
-            Handle::Radius(k) => r.edits.parts[k].radius = Some((d.start.x + view.along(d.point0, d.dir, total)).max(0.005)),
-            Handle::Half(k, _) => r.edits.parts[k].half = Some((d.start.x + view.along(d.point0, d.dir, total)).max(0.0)),
-            Handle::BoxAxis(k, i) => {
+            Handle::Joint(k) => {
+                let want = view.on_plane(at, d.point0);
+                let j = &d.joints0;
+                // The joints' places without their edits.
+                let base = |i: usize| j[i] - d.rig0.edits.joints[i] * M;
+                match LIMBS.iter().find(|l| l[1] == k || l[2] == k).filter(|_| d.ik) {
+                    Some(&[a, b, c]) if c == k => {
+                        let (mid, end) = reach(j[a], j[b], j[c], want);
+                        r.edits.joints[b] = (mid - base(b)) / M;
+                        r.edits.joints[c] = (end - base(c)) / M;
+                    }
+                    Some(&[a, b, c]) => r.edits.joints[b] = (swing(j[a], j[b], j[c], want) - base(b)) / M,
+                    None => r.edits.joints[k] = d.start + (want - d.point0) / M,
+                }
+            }
+            Handle::Radius(k) => r.edits.parts[k].radius = Some(snapped(d.start.x + view.along(d.point0, d.dir, total), 0.005).max(0.005)),
+            Handle::Half(k, _) => r.edits.parts[k].half = Some(snapped(d.start.x + view.along(d.point0, d.dir, total), 0.005).max(0.0)),
+            Handle::BoxAxis(k, i, _) => {
                 let mut h = d.start;
-                h[i] = (h[i] + view.along(d.point0, d.dir, total)).max(0.01);
+                h[i] = snapped(h[i] + view.along(d.point0, d.dir, total), 0.005).max(0.01);
                 r.edits.parts[k].boxed = Some(h);
             }
-            Handle::Move(k) => {
-                // The part's frame without its placement: the offset is in it.
-                let t = d.shown0.rotation * scene::from_angles(d.rig0.edits.parts[k].turn).inverse();
-                r.edits.parts[k].offset = d.start + t.inverse() * (view.on_plane(at, d.point0) - d.point0);
-            }
+            Handle::Free(k) => by = Some((k, view.on_plane(at, d.point0) - d.point0)),
+            Handle::Axis(k, _) => by = Some((k, d.dir * snapped(view.along(d.point0, d.dir, total), 0.01))),
             Handle::Ring(k, _) => {
                 let hit = |s: Pos2| {
                     let (o, dir) = view.ray(s);
@@ -504,19 +763,41 @@ impl App {
                     (den.abs() > 1e-4).then(|| o + dir * ((d.point0 - o).dot(d.dir) / den) - d.point0)
                 };
                 if let (Some(v0), Some(v1)) = (hit(d.press), hit(at)) {
-                    let ang = v0.cross(v1).dot(d.dir).atan2(v0.dot(v1));
-                    let a0 = scene::from_angles(d.start);
-                    let t = d.shown0.rotation * a0.inverse();
-                    let a1 = t.inverse() * Quat::from_axis_angle(d.dir, ang) * d.shown0.rotation;
-                    let mut turn = scene::angles(a1.normalize());
+                    let ang = snapped(v0.cross(v1).dot(d.dir).atan2(v0.dot(v1)), 5f32.to_radians());
+                    let turned = Quat::from_axis_angle(d.dir, ang);
+                    let t = frame(k);
+                    let turn = scene::angles((t.inverse() * turned * d.shown0.rotation).normalize());
                     // Rounded to a hundredth of a degree: the file's text stays short.
-                    turn = (turn * 100.0).round() / 100.0;
-                    r.edits.parts[k].turn = turn;
+                    r.edits.parts[k].turn = (turn * 100.0).round() / 100.0;
+                    // About the joint: the part's centre swings round it too.
+                    let c0 = d.shown0.translation;
+                    if d.point0.distance(c0) > 1e-6 {
+                        let c1 = d.point0 + turned * (c0 - d.point0);
+                        r.edits.parts[k].offset = d.rig0.edits.parts[k].offset + t.inverse() * (c1 - c0);
+                    }
                 }
             }
             _ => {}
         }
+        if let Some((k, by)) = by {
+            if d.joint {
+                r.edits.joints[k] = d.start + by / M;
+            } else {
+                r.edits.parts[k].offset = d.start + frame(k).inverse() * by;
+            }
+        }
         refit(&self.homer, m);
+        if self.symmetry {
+            mirror(&self.homer, m, &before);
+        }
+    }
+
+    /// Esc during a drag: the rig as it was.
+    fn cancel_drag(&mut self) {
+        if let (Some(d), Some(m)) = (self.drag.take(), &mut self.cur) {
+            m.rig = d.rig0;
+            refit(&self.homer, m);
+        }
     }
 
     fn end_drag(&mut self) {
@@ -533,7 +814,7 @@ impl App {
         let view = View::new(&self.cam, rect);
         let pointer = resp.hover_pos().or(resp.interact_pointer_pos());
         // The camera: the right button orbits, the middle (or Shift + right) pans, the wheel zooms.
-        let (shift, delta) = ui.input(|i| (i.modifiers.shift, i.pointer.delta()));
+        let (shift, ctrl, delta) = ui.input(|i| (i.modifiers.shift, i.modifiers.ctrl, i.pointer.delta()));
         if resp.dragged_by(egui::PointerButton::Secondary) && !shift {
             self.cam.yaw -= delta.x * 0.008;
             self.cam.pitch = (self.cam.pitch + delta.y * 0.008).clamp(-1.5, 1.5);
@@ -552,7 +833,7 @@ impl App {
             }
         }
         match self.tab {
-            Tab::Rig => self.rig_mouse(&view, &resp, pointer),
+            Tab::Rig => self.rig_mouse(&view, &resp, pointer, ctrl),
             Tab::Sim => self.sim_mouse(&view, &resp, pointer),
         }
         // The scene.
@@ -582,21 +863,22 @@ impl App {
         }
     }
 
-    fn rig_mouse(&mut self, view: &View, resp: &egui::Response, pointer: Option<Pos2>) {
+    fn rig_mouse(&mut self, view: &View, resp: &egui::Response, pointer: Option<Pos2>, snap: bool) {
         if self.drag.is_none() {
             self.hover = pointer.and_then(|p| self.hit(view, p));
         }
         if resp.drag_started_by(egui::PointerButton::Primary)
             && let (Some(h), Some(p)) = (self.hover, resp.interact_pointer_pos())
         {
-            if let Handle::Joint(k) | Handle::Move(k) = h {
+            if let Handle::Joint(k) = h {
                 self.sel = Some(k);
+                self.target_joint = true;
             }
             self.start_drag(view, h, p - resp.drag_delta());
         }
         if self.drag.is_some() {
             if let Some(p) = resp.interact_pointer_pos() {
-                self.drag_to(view, p);
+                self.drag_to(view, p, snap);
             }
             if resp.drag_stopped() {
                 self.end_drag();
@@ -614,7 +896,14 @@ impl App {
                         self.sel = (0..21).find(|&k| map[k] == name).or(self.sel);
                     }
                 }
-                Some(Handle::Part(k) | Handle::Joint(k)) => self.sel = Some(k),
+                Some(Handle::Part(k)) => {
+                    self.sel = Some(k);
+                    self.target_joint = false;
+                }
+                Some(Handle::Joint(k)) => {
+                    self.sel = Some(k);
+                    self.target_joint = true;
+                }
                 None => {
                     self.sel = None;
                     self.pick = None;
@@ -680,12 +969,47 @@ impl App {
         let Ok(f) = &m.fit else { return };
         let hs = self.handles(view);
         let active = self.drag.as_ref().map(|d| d.handle).or(self.hover);
+        let gizmo = self.gizmo(view);
+        // The limbs' mirror images: the selected part's other side, when symmetric.
+        if self.symmetry
+            && let Some(k) = self.sel
+            && let Some(o) = PAIRS.iter().find_map(|&(a, b)| if a == k { Some(b) } else if b == k { Some(a) } else { None })
+            && let Some(s) = view.project(f.shown[o].translation)
+        {
+            painter.circle_stroke(s, 9.0, Stroke::new(1.5_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 140)));
+        }
+        if let Some(g) = &gizmo
+            && self.tool.turns()
+        {
+            for i in 0..4 {
+                let hot = active == Some(Handle::Ring(g.k, i));
+                let c = if hot { HOT } else if i < 3 { AXIS_COLORS[i] } else { Color32::from_gray(190) };
+                painter.add(egui::Shape::line(Self::ring(view, g, i), Stroke::new(if hot { 3.0_f32 } else { 1.5 }, c)));
+            }
+        }
+        if let Some(g) = &gizmo
+            && self.tool.moves()
+            && let Some(c) = view.project(g.at)
+        {
+            for i in 0..3 {
+                let Some(t) = view.project(g.at + g.axes[i] * g.arrow) else { continue };
+                if t.distance(c) < 8.0 {
+                    continue;
+                }
+                let hot = active == Some(Handle::Axis(g.k, i));
+                let col = if hot { HOT } else { AXIS_COLORS[i] };
+                painter.line_segment([c, t], Stroke::new(if hot { 4.0_f32 } else { 2.5 }, col));
+                let (dir, side) = ((t - c).normalized(), (t - c).normalized().rot90());
+                painter.add(egui::Shape::convex_polygon(vec![t + dir * 11.0, t + side * 5.0, t - side * 5.0], col, Stroke::NONE));
+            }
+        }
         for (h, p) in &hs {
             let Some(s) = view.project(*p) else { continue };
             let hot = active == Some(*h);
             match h {
+                Handle::Axis(..) => {}
                 Handle::Joint(k) => {
-                    let sel = self.sel == Some(*k);
+                    let sel = self.sel == Some(*k) && (self.target_joint || !self.tool.moves());
                     let c = if SPREAD.contains(k) { Color32::from_rgb(200, 160, 255) } else { Color32::from_rgb(255, 210, 60) };
                     painter.circle_filled(s, if sel || hot { HANDLE_PX } else { 4.5 }, c);
                     painter.circle_stroke(s, if sel || hot { HANDLE_PX } else { 4.5 }, Stroke::new(1.0_f32, Color32::BLACK));
@@ -693,26 +1017,18 @@ impl App {
                         text(s, PARTS[*k], c);
                     }
                 }
-                Handle::Move(_) => {
-                    let r = egui::Rect::from_center_size(s, egui::vec2(11.0, 11.0));
-                    painter.rect_stroke(r, 0.0, Stroke::new(if hot { 3.0_f32 } else { 2.0 }, Color32::WHITE), egui::StrokeKind::Middle);
+                Handle::Free(_) => {
+                    let r = egui::Rect::from_center_size(s, egui::vec2(12.0, 12.0));
+                    painter.rect_stroke(r, 0.0, Stroke::new(if hot { 3.0_f32 } else { 2.0 }, if hot { HOT } else { Color32::WHITE }), egui::StrokeKind::Middle);
                 }
                 _ => {
-                    let c = if hot { Color32::WHITE } else { Color32::from_rgb(80, 220, 255) };
-                    painter.circle_filled(s, if hot { 6.5 } else { 5.0 }, c);
+                    // A scale handle: a square on the shape, tied to its centre.
+                    let c = if hot { HOT } else { Color32::from_rgb(80, 220, 255) };
                     if let Some(c0) = view.project(f.shown[self.sel.unwrap_or(0)].translation) {
                         painter.line_segment([c0, s], Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 220, 255, 120)));
                     }
+                    painter.rect_filled(egui::Rect::from_center_size(s, egui::vec2(9.0, 9.0) * if hot { 1.3 } else { 1.0 }), 0.0, c);
                 }
-            }
-        }
-        if let Some(k) = self.sel {
-            let s = f.shown[k];
-            let cols = [Color32::from_rgb(235, 70, 70), Color32::from_rgb(80, 210, 80), Color32::from_rgb(80, 120, 255)];
-            for i in 0..3 {
-                let hot = active == Some(Handle::Ring(k, i));
-                let pts: Vec<Pos2> = Self::ring_points(s.translation, s.rotation * Vec3::AXES[i], Self::ring_radius(f, k)).into_iter().filter_map(|p| view.project(p)).collect();
-                painter.add(egui::Shape::line(pts, Stroke::new(if hot { 3.0_f32 } else { 1.5 }, cols[i])));
             }
         }
         if let (Some(Handle::Bone(b)), Some(p)) = (self.hover, pointer) {
@@ -1030,6 +1346,7 @@ impl App {
                 m.rig.edits.parts[k] = pe;
                 m.rig.edits.joints[k] = joint;
             }
+            let rig_before = before.clone();
             if m.rig != before {
                 if !(dragging && self.number_drag) {
                     m.undo.push(before);
@@ -1038,6 +1355,9 @@ impl App {
             }
             self.number_drag = dragging;
             refit(&self.homer, m);
+            if self.symmetry {
+                mirror(&self.homer, m, &rig_before);
+            }
         }
     }
 
@@ -1126,6 +1446,23 @@ impl eframe::App for App {
         }
         if esc {
             self.pick = None;
+            self.cancel_drag();
+        }
+        // The tools' keys (not while typing, not with Ctrl).
+        if self.tab == Tab::Rig && !ctx.wants_keyboard_input() {
+            ctx.input(|i| {
+                if i.modifiers.is_none() {
+                    if let Some(t) = Tool::ALL.iter().find(|t| i.key_pressed(t.2)) {
+                        self.tool = t.0;
+                    }
+                    if i.key_pressed(egui::Key::M) {
+                        self.symmetry = !self.symmetry;
+                    }
+                    if i.key_pressed(egui::Key::I) {
+                        self.ik = !self.ik;
+                    }
+                }
+            });
         }
         // The physics: real time, or the screenshot's steps at the game's pace a frame.
         if self.tab == Tab::Sim
@@ -1152,8 +1489,27 @@ impl eframe::App for App {
                 ui.add(egui::Slider::new(&mut self.parts_alpha, 0.0..=1.0).text("parts"));
                 ui.checkbox(&mut self.show_bones, "bones");
                 ui.separator();
-                ui.label(egui::RichText::new("left: select / drag handles · right: orbit · middle or Shift+right: pan · wheel: zoom · Ctrl+Z/Y, Ctrl+S").weak());
+                ui.label(egui::RichText::new("left: select / drag · Ctrl: snap · right: orbit · middle or Shift+right: pan · wheel: zoom · Ctrl+Z/Y, Ctrl+S").weak());
             });
+            if self.tab == Tab::Rig {
+                ui.horizontal(|ui| {
+                    for (t, name, key, hint) in Tool::ALL {
+                        ui.selectable_value(&mut self.tool, t, format!("{name} ({})", key.name())).on_hover_text(hint);
+                    }
+                    ui.separator();
+                    ui.label("axes");
+                    ui.selectable_value(&mut self.space, Space::Part, "Part").on_hover_text("the part's own: a capsule's green axis is its length, along its bone");
+                    ui.selectable_value(&mut self.space, Space::Bone, "Bone").on_hover_text("the model's bone mapped to the part");
+                    ui.selectable_value(&mut self.space, Space::World, "World");
+                    ui.separator();
+                    ui.label("turn about");
+                    ui.selectable_value(&mut self.pivot_joint, false, "centre");
+                    ui.selectable_value(&mut self.pivot_joint, true, "joint");
+                    ui.separator();
+                    ui.toggle_value(&mut self.symmetry, "Symmetry (M)").on_hover_text("a limb's edit is mirrored on the other side, across the model's plane between its hips");
+                    ui.toggle_value(&mut self.ik, "IK (I)").on_hover_text("dragging a wrist or ankle joint carries the elbow or knee, the limb's lengths kept; an elbow or knee turns about the limb's line");
+                });
+            }
         });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.label(&self.status);
@@ -1184,5 +1540,33 @@ impl eframe::App for App {
             }
         }
         ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reach_keeps_lengths() {
+        let (root, mid, end) = (Vec3::ZERO, Vec3::new(0.3, 0.0, -0.05), Vec3::new(0.55, 0.0, 0.0));
+        for want in [Vec3::new(0.2, 0.3, 0.1), Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.01, 0.0, 0.0)] {
+            let (m, e) = reach(root, mid, end, want);
+            assert!((m.distance(root) - mid.distance(root)).abs() < 1e-3);
+            assert!((e.distance(m) - end.distance(mid)).abs() < 1e-3);
+        }
+        // Within reach the end gets there, bent the way it was (down).
+        let (m, e) = reach(root, mid, end, Vec3::new(0.4, 0.1, 0.0));
+        assert!(e.distance(Vec3::new(0.4, 0.1, 0.0)) < 1e-4);
+        assert!(m.z < 0.0);
+    }
+
+    #[test]
+    fn swing_keeps_ends() {
+        let (root, mid, end) = (Vec3::ZERO, Vec3::new(0.3, 0.0, -0.05), Vec3::new(0.55, 0.0, 0.0));
+        let m = swing(root, mid, end, Vec3::new(0.3, 0.5, 0.0));
+        assert!((m.distance(root) - mid.distance(root)).abs() < 1e-4);
+        assert!((end.distance(m) - end.distance(mid)).abs() < 1e-4);
+        assert!(m.y > 0.04);
     }
 }

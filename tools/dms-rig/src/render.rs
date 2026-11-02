@@ -139,6 +139,15 @@ impl View {
         o + d * ((p - o).dot(n) / den)
     }
 
+    /// The world length a pixel spans at `p` (m): handles keep their size on the screen.
+    pub fn pixel(&self, p: Vec3) -> f32 {
+        let side = (self.eye - p).cross(Vec3::Z).normalize_or(Vec3::X);
+        match (self.project(p), self.project(p + side * 0.1)) {
+            (Some(a), Some(b)) if a.distance(b) > 1e-3 => 0.1 / a.distance(b),
+            _ => 0.001,
+        }
+    }
+
     /// How far along `dir` (a world direction from `p`) a mouse move of `delta` pixels goes (m).
     pub fn along(&self, p: Vec3, dir: Vec3, delta: eframe::egui::Vec2) -> f32 {
         let (Some(a), Some(b)) = (self.project(p), self.project(p + dir * 0.1)) else { return 0.0 };

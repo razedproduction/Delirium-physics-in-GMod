@@ -15,12 +15,13 @@ use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
 usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphysics.dll>] [--model <models/...mdl>]
-                [--screenshot <file.png> [--sim <steps>]]
+                [--select <part>] [--tool <select|move|rotate|scale|all>] [--screenshot <file.png> [--sim <steps>]]
   the rig editor: a model's NM rig made by the mouse, saved as garrysmod\\data\\dms\\skeletons\\<model>.json
   --gmod      Garry's Mod's folder (default: DMS_GMOD_DIR, else Steam's library from the registry)
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
   --vphysics  the fork's vphysics.dll (default: Garry's Mod's bin\\win64, else the repository's vphysics\\build)
   --model     a model to open at once
+  --select    an NM part to select at once (Thigh_Left, Hand_Right, ...); --tool the gizmo's tool
   --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
   --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
   --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)";
@@ -57,6 +58,8 @@ pub struct Options {
     pub vphysics: Option<PathBuf>,
     pub model: Option<String>,
     pub screenshot: Option<(PathBuf, u64)>,
+    pub select: Option<String>,
+    pub tool: Option<String>,
 }
 
 fn main() {
@@ -91,6 +94,8 @@ fn run() -> Result<(), String> {
         .ok_or("no GTA IV folder: pass --game <your GTA IV folder> (NM's body is Homer's, fitted)")?;
     let vphysics = take("--vphysics").map(PathBuf::from);
     let model = take("--model");
+    let select = take("--select");
+    let tool = take("--tool");
     let shot = take("--screenshot").map(PathBuf::from);
     let classify = take("--classify");
     let bones = take("--bones");
@@ -124,7 +129,7 @@ fn run() -> Result<(), String> {
     let homer = load_homer(&game)?;
     println!("dms-rig: Garry's Mod at {}", gmod.display());
     let fs = gamefs::GameFs::open(&gmod)?;
-    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))) };
+    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]).with_title("DMS rig editor"),
         depth_buffer: 24,

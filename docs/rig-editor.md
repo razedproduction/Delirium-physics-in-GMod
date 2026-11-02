@@ -24,9 +24,17 @@ reads models where the game has them (its VPKs, loose files, the Workshop's GMAs
 - **Mapping** (right): a bone for each NM part, from the list or by *pick* and a click on the bone in the view.
   NM's Spine1–3 are always spread between the spine and the neck. A mapping equal to the model's own isn't written.
 - **The mouse** in the view: click a part or a joint to select it. Drag a joint (yellow; violet for the spread spine
-  joints) to move it; the selected part's blue handles change a capsule's radius and length or a box's extents; its
-  white square moves the part on its bone and the three rings turn it. Right button orbits, middle (or Shift + right)
-  pans, the wheel zooms.
+  joints) to move it. Right button orbits, middle (or Shift + right) pans, the wheel zooms.
+- **The gizmo** on the selected part, one tool at a time (the second toolbar): *Select* (Q, none), *Move* (W: arrows
+  along the axes, the white square on the screen's plane), *Rotate* (E: a ring about each axis, the outer grey one about
+  the view), *Scale* (R: the blue squares change a capsule's radius and length or a box's extents), *All* (T). Its axes
+  are the part's own (*Part*: a capsule's green axis is its length, along its bone), the model's bone's (*Bone*) or the
+  world's; the rings turn the part about its centre or its joint. Move moves the part on its bone, or the joint when a
+  joint was clicked last. Ctrl snaps: moves to 1 cm, sizes to 5 mm, turns to 5°; Esc cancels a drag.
+- **Symmetry** (M): an edit of an arm's or a leg's part or joint is made on the other side too, across the model's plane
+  between its hips: the joint's move mirrored, the size and mass copied, the part's placement its mirror image.
+- **IK** (I): dragging a wrist's or an ankle's joint carries the elbow or knee (the shoulder or hip stays, the limb's
+  lengths kept, bent as it was); dragging an elbow or a knee turns it about the limb's line.
 - **Numbers**: the selected part's joint offset (units), size (m), mass (kg), offset (m) and turn (degrees), editable
   by dragging or typing.
 - **File**: *Save* (Ctrl+S) writes `data/dms/skeletons/<model>.json`; *Import* reads a rig file from anywhere (a rig sent
@@ -43,5 +51,5 @@ drag any part with the left button. Gravity is NM's 9.8 m/s² (what the body fee
 ## For scripts
 
 `--classify <text>` prints the class of every model whose path or source contains the text (no window);
-`--bones <model>` its bones; `--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many
+`--bones <model>` its bones; `--select <part>` and `--tool <name>` set the view up; `--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many
 physics steps) and quits.
