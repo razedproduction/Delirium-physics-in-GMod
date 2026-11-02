@@ -661,13 +661,13 @@ player models with other rigs (none mounted yet; with M12.5's editor for the one
 An application of its own (Rust, egui; win64, no AVX2), the user's choice: editing a rig with sliders in the game is
 awkward. It writes the rig files the addon reloads (M12), so the game can stay open beside it.
 
-- [ ] Models: GMod's own and the Workshop's read where they are (the game's VPKs, loose files, the mounted GMAs: read
+- [x] Models: GMod's own and the Workshop's read where they are (the game's VPKs, loose files, the mounted GMAs: read
       only, nothing copied): `.mdl` (bones), `.vvd` and `.vtx` (the mesh), drawn in its own pose (the mesh's bind).
-- [ ] The rig over the model: NM's capsules and boxes from `tools/dms-fit` (the module's own fit, GTA IV's data as the
+- [x] The rig over the model: NM's capsules and boxes from `tools/dms-fit` (the module's own fit, GTA IV's data as the
       module reads it), refitted as anything changes.
-- [ ] Editing by the mouse: a bone picked by clicking it, joints dragged in 3D, a capsule's radius and length by its
+- [x] Editing by the mouse: a bone picked by clicking it, joints dragged in 3D, a capsule's radius and length by its
       handles, a part turned by rings; numbers editable beside; undo; the rig file saved (format 2), opened, shared.
-- [ ] **Simulation on the fork itself**, step 1: `vphysics.dll` (VPhysics-Box3D, `IPhysicsNM` `VBOX3D_NM_006`) loaded
+- [x] **Simulation on the fork itself**, step 1: `vphysics.dll` (VPhysics-Box3D, `IPhysicsNM` `VBOX3D_NM_006`) loaded
       into the application, the fitted body made natively as the module makes it (a floor, gravity), dropped, thrown
       and dragged by the mouse without NM: the capsules, joints, limits and masses checked on the physics the game runs.
 - [ ] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
@@ -675,6 +675,21 @@ awkward. It writes the rig files the addon reloads (M12), so the game can stay o
 
 **DoD:** a Workshop model whose rig isn't found by itself is made to stand under NM in the game with a rig made in the
 editor in minutes, without touching a slider in the game; the rig file opens on another machine the same.
+
+**So far (ADR 0031):** `tools/dms-rig` (eframe/egui, OpenGL) reads the game's VPKs, loose files and the Workshop's GMAs
+(13 697 models here), draws a model's mesh in its own pose with NM's parts fitted over it by `dms_fit` (male_07: 1.81 m,
+81.2 kg, as the module), edits the rig by the mouse (joints, a capsule's radius and length, a box's extents, a part
+moved and turned on its bone by handles and rings, bones picked by a click; numbers beside; undo) and saves, imports,
+pastes and copies the rig file. The bind and the native body moved out of the Lua natives into `tools/dms-vphysics`
+(with the `IPhysicsNM` bindings and a host for the fork outside the game); the editor loads the game's `vphysics.dll`
+and drops, throws, kicks and drags the fitted body on it (a concrete floor with NM's row, 127 surface properties, 0.4 ms
+a step), the model's mesh skinned from the parts. On the bench after the move: Homer's `stand`, `push`, `shot`,
+`catchfall`, `blast`, `getup`, `death` within the tolerances (`push` COM mean 0.020 m as before), `golden body --fit`
+on male_07 OK; a rig file written beside the running game (a thigh's radius, the head's mass and turn, a knee moved)
+refitted the model's ragdoll with NM within a second, and it stood (pelvis 0.98 m after 12 s). Open: no mounted
+Workshop model needs a rig of its own (62 ValveBiped, the rest not humanoid; `dms-rig --classify workshop`), and the
+game's own unmapped humanoids lack bones for required parts (the stalker's and the skeleton's hands, the poison
+zombie's head), so the DoD's model waits for one the user subscribes to; step 2 (NM in FOLLOW in the editor).
 
 ### Deferred: Playroom features not needed for Homer's behaviour
 

@@ -16,7 +16,8 @@ use delirium::prelude::*;
 use delirium::ragdoll::{Build, Ragdoll};
 
 use crate::data;
-use crate::ffi::vphysics_nm::{self, IPhysicsConstraint, IPhysicsObject, PhysicsNMBodyState, Version};
+use crate::ffi::vphysics_nm::{self, IPhysicsObject, Version};
+use dms_vphysics::body::{NativeBody, PartState};
 use crate::follow::BodyDef;
 use crate::lua::{self, Api, LuaState, TTABLE, native};
 use dms_fit::fit::{FINISH_MAX, Fit, Posed, bind_report, height};
@@ -449,37 +450,10 @@ pub fn angles(q: Quat) -> [f32; 3] {
 /// pairs (`SetBodyCollisionPairs`) decide first.
 const NO_SELF_COLLISIONS: u16 = 0x8000;
 
-/// A fitted body made by the fork (`VBOX3D_NM_005`+): its 21 bodies in part order and their joints (null for the
-/// root).
-#[derive(Clone)]
-pub struct NativeBody {
-    pub objects: Vec<*mut IPhysicsObject>,
-    pub joints: Vec<*mut IPhysicsConstraint>,
-}
-
-// SAFETY: only used on the game's main thread, where the physics and Lua both run.
-unsafe impl Send for NativeBody {}
-
 static NATIVE: Mutex<Option<(u32, HashMap<u32, NativeBody>)>> = Mutex::new(None);
 
 fn native(handle: u32) -> Result<NativeBody, String> {
     NATIVE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|(_, m)| m.get(&handle).cloned()).ok_or_else(|| format!("no native body #{handle}"))
-}
-
-/// A part's state: frame (m, world) and its centre's velocity and spin.
-#[derive(Clone, Copy)]
-struct PartState {
-    pos: Vec3,
-    rot: Quat,
-    vel: Vec3,
-    spin: Vec3,
-}
-
-impl PartState {
-    /// The rigid motion of this part carried to a point.
-    fn at(&self, p: Vec3) -> Vec3 {
-        self.vel + self.spin.cross(p - self.pos)
-    }
 }
 
 /// The model's ragdoll objects handed over by Lua: `{{name = bone, obj = PhysObj, pos = its origin (units)}, ...}`.
@@ -615,55 +589,8 @@ unsafe fn ragdoll_body_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String
         return Err("the ragdoll's pose isn't finite".into());
     }
     let started = std::time::Instant::now();
-    // SAFETY: a PhysObj Lua handed over.
-    let env = unsafe { nm.object_environment(owner) };
-    let mut made = NativeBody { objects: vec![], joints: vec![std::ptr::null_mut(); body.parts.len()] };
-    let undo = |made: &NativeBody| {
-        for &j in &made.joints {
-            // SAFETY: made below, not destroyed yet.
-            unsafe { nm.destroy_joint(j) };
-        }
-        for &o in &made.objects {
-            unsafe { nm.destroy_body(o) };
-        }
-    };
-    for (p, s) in body.parts.iter().zip(&states) {
-        let points: Vec<[f32; 3]> = dms_homer::hull::points(&p.shape).iter().map(|v| v.to_array()).collect();
-        // SAFETY: `env` is the owner's live environment; outside the step callback (Lua).
-        let o = unsafe { nm.create_body(env, owner, &points, p.mass, &s.pos.to_array(), &s.rot.to_array(), NO_SELF_COLLISIONS) }.unwrap_or(std::ptr::null_mut());
-        if o.is_null() {
-            undo(&made);
-            return Err(format!("{}: CreateBody failed", p.name));
-        }
-        made.objects.push(o);
-    }
-    for j in &body.joints {
-        // SAFETY: two bodies just made.
-        let c = unsafe { nm.create_joint(made.objects[j.parent], made.objects[j.part], j.hinge) }.unwrap_or(std::ptr::null_mut());
-        if c.is_null() {
-            undo(&made);
-            return Err(format!("{}: CreateJoint failed", body.parts[j.part].name));
-        }
-        made.joints[j.part] = c;
-    }
-    // NM's pivots, frames and limits in the pose they're in, then their motion and NM's own collision pairs.
-    let top = unsafe { (api.gettop)(l) };
-    let bound = unsafe { crate::bind::bind_body(api, l, body, &made.objects) };
-    unsafe { (api.settop)(l, top) };
-    if let Err(e) = bound {
-        undo(&made);
-        return Err(format!("bind: {e}"));
-    }
-    for (&o, s) in made.objects.iter().zip(&states) {
-        let state = PhysicsNMBodyState { position: s.pos.to_array(), rotation: s.rot.to_array(), velocity: s.vel.to_array(), angular_velocity: s.spin.to_array() };
-        // SAFETY: a body just made, outside the step callback.
-        unsafe { nm.set_body_state(o, &state) };
-    }
-    // SAFETY: as above.
-    if unsafe { nm.set_body_collision_pairs(&made.objects, &body.pairs) } != Some(true) {
-        undo(&made);
-        return Err("SetBodyCollisionPairs refused NM's self-collision pairs".into());
-    }
+    // SAFETY: a PhysObj Lua handed over; its live environment, outside the step callback (Lua).
+    let made = unsafe { NativeBody::make(&nm, nm.object_environment(owner), owner, body, &states, NO_SELF_COLLISIONS)? };
     let ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut slot = NATIVE.lock().unwrap_or_else(|e| e.into_inner());
     let (next, map) = slot.get_or_insert_with(|| (0, HashMap::new()));
@@ -764,13 +691,8 @@ unsafe fn ragdoll_remove_impl(api: &Api, l: *mut LuaState) -> Result<c_int, Stri
     let handle = unsafe { api.check_number(l, 1)? } as u32;
     let n = NATIVE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|(_, m)| m.remove(&handle));
     if let (Some(n), Some(nm)) = (n, vphysics_nm::get()) {
-        for &j in &n.joints {
-            // SAFETY: made by `ragdoll_body`, not destroyed yet.
-            unsafe { nm.destroy_joint(j) };
-        }
-        for &o in &n.objects {
-            unsafe { nm.destroy_body(o) };
-        }
+        // SAFETY: made by `ragdoll_body`, not destroyed yet.
+        unsafe { n.destroy(&nm) };
     }
     Ok(0)
 }

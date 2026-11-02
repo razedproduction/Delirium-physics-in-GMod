@@ -18,3 +18,5 @@ dms-game = { path = "../tools/dms-game" }
 dms-fit = { path = "../tools/dms-fit" }
 # Only its hulls (NM's capsules and boxes as VPhysics-Box3D grows them), for the native bodies (ROADMAP M9).
 dms-homer = { path = "../tools/dms-homer" }
+# The fork's IPhysicsNM, the bind and the native bodies without Lua, shared with the rig editor (docs/adr/0031).
+dms-vphysics = { path = "../tools/dms-vphysics" }
