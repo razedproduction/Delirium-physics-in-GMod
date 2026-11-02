@@ -4,6 +4,7 @@ AddCSLuaFile("dms/cl_face.lua")
 AddCSLuaFile("dms/cl_overlay.lua")
 AddCSLuaFile("dms/cl_menu.lua")
 AddCSLuaFile("dms/cl_ragdolls.lua")
+AddCSLuaFile("dms/cl_rig_view.lua")
 
 -- This addon's release: the module has to be the same one (scripts\package.ps1 checks both are Cargo.toml's).
 DMS_ADDON_VERSION = "0.1.0"
@@ -74,6 +75,8 @@ include("dms/tuning.lua")
 include("dms/overlay.lua")
 include("dms/bench_scene.lua")
 include("dms/dev.lua")
+include("dms/skeletons.lua")
+include("dms/rig_view.lua")
 include("dms/ragdolls.lua")
 include("dms/deaths.lua")
 include("dms/live.lua")

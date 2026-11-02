@@ -1,4 +1,4 @@
--- Live bodies (ROADMAP M11.5, docs/adr/0029): an NPC or a player with a ValveBiped model becomes a server ragdoll of
+-- Live bodies (ROADMAP M11.5, docs/adr/0029): an NPC or a player with a humanoid model becomes a server ragdoll of
 -- its model with NM on it (deaths.lua's DMS_RagdollFrom: posed from its bones, moving as it was) and comes back on its
 -- feet where the body is. The NPC or player itself is hidden meanwhile (not drawn, not solid, not moving, an NPC not
 -- thinking or targeted), keeping its health, relationships and weapons; hits on the ragdoll are its hits (its health,
@@ -14,7 +14,7 @@ local M = 0.0254
 local say = DMS_Say
 
 local liveNpc = CreateConVar("dms_live_npc", "1", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-	"A ValveBiped NPC shot (not killed) becomes its ragdoll with NM, the Playroom's reaction to the shot, then gets up where the body is")
+	"A humanoid NPC shot (not killed) becomes its ragdoll with NM, the Playroom's reaction to the shot, then gets up where the body is")
 local liveMax = CreateConVar("dms_live_max", "4", FCVAR_ARCHIVE,
 	"NPCs that are ragdolls with NM at once (within dms_max_agents); more take their shots as the game does")
 local liveTime = CreateConVar("dms_live_time", "15", FCVAR_ARCHIVE,
@@ -119,7 +119,7 @@ local function begin(ent, kind)
 	local room, full = DMS_AgentRoom()
 	if not room then return nil, full end
 	local rag = DMS_RagdollFrom(ent)
-	if not rag then return nil, ent:GetModel() .. " has no ValveBiped ragdoll" end
+	if not rag then return nil, ent:GetModel() .. " has no humanoid ragdoll NM can drive (dms_rig)" end
 	local id, why = DMS_AttachRagdoll(rag)
 	if not id then
 		rag:Remove()
@@ -230,7 +230,7 @@ hook.Add("EntityTakeDamage", "DMS_Live", function(ent, dmg)
 	end
 	-- A shot NPC that lives: into its ragdoll, the shot the room's.
 	if not ent:IsNPC() or not liveNpc:GetBool() or not bullet(dmg) or dmg:GetDamage() >= ent:Health() then return end
-	if count("npc") >= liveMax:GetInt() or not possible() or not DMS_HasValveBiped(ent) then return end
+	if count("npc") >= liveMax:GetInt() or not possible() or not DMS_HasMapped(ent) then return end
 	local h = DMS_HitOf(ent, dmg)
 	local made, why = begin(ent, "npc")
 	if not made then
@@ -330,7 +330,7 @@ concommand.Add("dms_drunk", function(ply)
 	end
 	if not ply:Alive() or ply:InVehicle() then return say(ply, "[DMS] dms_drunk: not while dead or in a vehicle") end
 	if not possible() then return say(ply, "[DMS] dms_drunk: needs the fork's VBOX3D_NM_006 (" .. tostring(DMS.InterfaceVersion()) .. ")") end
-	if not DMS_HasValveBiped(ply) then return say(ply, "[DMS] dms_drunk: " .. ply:GetModel() .. " has no ValveBiped ragdoll") end
+	if not DMS_HasMapped(ply) then return say(ply, "[DMS] dms_drunk: " .. ply:GetModel() .. " has no humanoid ragdoll NM can drive (dms_rig)") end
 	local rag, why = begin(ply, "drunk")
 	if not rag then return say(ply, "[DMS] dms_drunk: " .. tostring(why)) end
 	DMS_React(rag, "button name=drunk")

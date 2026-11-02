@@ -17,7 +17,7 @@ function dms.Get(rag)
 	return setmetatable({ ent = rag }, Controller)
 end
 
--- NM on a Homer ragdoll (models/dms/homer.mdl, bound at its spawn) or on any ValveBiped prop_ragdoll (ROADMAP M10: a
+-- NM on a Homer ragdoll (models/dms/homer.mdl, bound at its spawn) or on any humanoid prop_ragdoll (ROADMAP M10: a
 -- body fitted to its model takes its pose and motion). opts: `balance` (default true: bodyBalance, as the Playroom's
 -- "balance" button). The controller, or nil and why.
 function dms.Attach(rag, opts)
@@ -27,10 +27,10 @@ function dms.Attach(rag, opts)
 	if rag:GetModel() == DMS_HOMER_MODEL then
 		if not rag.DMS_Bound then return nil, "not bound to NM's body (spawn him with dms_homer or the spawn menu)" end
 		id, why = DMS_Follow(rag)
-	elseif DMS_IsValveBiped(rag) then
+	elseif DMS_IsMapped(rag) then
 		id, why = DMS_AttachRagdoll(rag)
 	else
-		return nil, "not a Homer ragdoll (" .. DMS_HOMER_MODEL .. ") nor a ValveBiped one"
+		return nil, DMS_WhyNotMapped(rag)
 	end
 	if not id then return nil, why end
 	local c = dms.Get(rag)
@@ -38,7 +38,7 @@ function dms.Attach(rag, opts)
 	return c
 end
 
--- NM off: an ordinary ragdoll again. A ValveBiped one gets its own physics back as a new ragdoll in the same pose and
+-- NM off: an ordinary ragdoll again. A fitted one gets its own physics back as a new ragdoll in the same pose and
 -- motion (its own constraints were taken off for NM): true and the new entity.
 function dms.Detach(rag)
 	if not IsValid(rag) or not rag.DMS_Agent then return false end

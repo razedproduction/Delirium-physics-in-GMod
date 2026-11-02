@@ -521,6 +521,15 @@ name = "dms-ctl"
 version = "0.1.0"
 
 [[package]]
+name = "dms-fit"
+version = "0.1.0"
+dependencies = [
+ "delirium",
+ "delirium-data",
+ "dms-game",
+]
+
+[[package]]
 name = "dms-game"
 version = "0.1.0"
 dependencies = [
@@ -681,6 +690,7 @@ dependencies = [
  "delirium",
  "delirium-data",
  "delirium-sdk",
+ "dms-fit",
  "dms-game",
  "dms-homer",
 ]

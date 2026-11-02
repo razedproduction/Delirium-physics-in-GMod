@@ -1,4 +1,4 @@
--- Death ragdolls (ROADMAP M11, docs/adr/0028): an NPC or a player with a ValveBiped model that dies leaves a server
+-- Death ragdolls (ROADMAP M11, docs/adr/0028): an NPC or a player with a humanoid model that dies leaves a server
 -- ragdoll with NM on it at once (ragdolls.lua), in the pose and moving as it died, and the killing hit goes to it as the
 -- Playroom's room takes one (follow/room.rs) on a fatally injured body (health 49): its ShotTask's dying reaction
 -- (`shot`, `shotRelax`), no getting up, later hits reacting till its health is 0 (the room's death: `STOP all`, `relax`).
@@ -15,7 +15,7 @@
 local M = 0.0254
 
 local npcs = CreateConVar("dms_autoattach_npc", "1", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-	"NM on the death ragdolls of NPCs with ValveBiped models (made on the server for it), reacting to the killing hit")
+	"NM on the death ragdolls of NPCs with humanoid models (made on the server for it), reacting to the killing hit")
 local players = CreateConVar("dms_autoattach_players", "1", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
 	"NM on players' death ragdolls: a server ragdoll of the player's model in place of GMod's client one, the death camera on it")
 local maxDeaths = CreateConVar("dms_autoattach_max", "4", FCVAR_ARCHIVE,
@@ -146,7 +146,7 @@ end
 
 -- The killing hit, and for an NPC its ragdoll made on the server without the game's push.
 hook.Add("EntityTakeDamage", "DMS_Deaths", function(ent, dmg)
-	if not (ent:IsNPC() or ent:IsPlayer()) or not wanted(ent) or not DMS_HasValveBiped(ent) then return end
+	if not (ent:IsNPC() or ent:IsPlayer()) or not wanted(ent) or not DMS_HasMapped(ent) then return end
 	ent.DMS_LastHit = hitOf(ent, dmg)
 	if ent:IsNPC() and possible() and dmg:GetDamage() >= ent:Health() then
 		ent:SetShouldServerRagdoll(true)
@@ -159,7 +159,7 @@ end)
 hook.Add("CreateEntityRagdoll", "DMS_Deaths", function(owner, rag)
 	-- One that died as a ragdoll (live.lua): that ragdoll is its corpse.
 	if not IsValid(owner) or owner.DMS_Live or not owner:IsNPC() or not npcs:GetBool() or not possible() then return end
-	if not IsValid(rag) or rag:GetClass() ~= "prop_ragdoll" or not DMS_IsValveBiped(rag) then return end
+	if not IsValid(rag) or rag:GetClass() ~= "prop_ragdoll" or not DMS_IsMapped(rag) then return end
 	local h, name = owner.DMS_LastHit, tostring(owner)
 	-- Undo and cleanup take the corpse in the NPC's place.
 	undo.ReplaceEntity(owner, rag)
@@ -173,7 +173,7 @@ hook.Add("CreateEntityRagdoll", "DMS_Deaths", function(owner, rag)
 end)
 
 -- A ragdoll of a player's or an NPC's model as it looks, posed from its bones and moving as it was (a player's death
--- ragdoll, live.lua's). The ragdoll, or nil for a model without a ValveBiped one.
+-- ragdoll, live.lua's). The ragdoll, or nil for a model NM can't drive.
 function DMS_RagdollFrom(ent)
 	local rag = ents.Create("prop_ragdoll")
 	rag:SetModel(ent:GetModel())
@@ -190,7 +190,7 @@ function DMS_RagdollFrom(ent)
 	end
 	rag:Spawn()
 	rag:Activate()
-	if not DMS_IsValveBiped(rag) then
+	if not DMS_IsMapped(rag) then
 		rag:Remove()
 		return nil
 	end
@@ -228,7 +228,7 @@ hook.Add("PlayerDeath", "DMS_Deaths", function(ply)
 	if ply.DMS_Live then return end
 	-- One death ragdoll a player, as GMod's.
 	dropCorpse(ply)
-	if not players:GetBool() or not possible() or not DMS_HasValveBiped(ply) then return end
+	if not players:GetBool() or not possible() or not DMS_HasMapped(ply) then return end
 	local h = ply.DMS_LastHit
 	local rag = DMS_RagdollFrom(ply)
 	if not rag then return end
@@ -266,28 +266,11 @@ hook.Add("PlayerSpawn", "DMS_Deaths", function(ply) ply:SetNW2Entity("DMS_Corpse
 hook.Add("PlayerDisconnected", "DMS_Deaths", dropCorpse)
 
 -- A model's first NM body makes its 21 hulls in the fork (~0.9 s at once): for the NPCs and players that may die,
--- their model is fitted and its hulls made ahead, a part a tick (DMS.RagdollWarm). Model -> the next part, or true.
-local warm, queue = {}, {}
-
+-- their model is fitted and its hulls made ahead, a part a tick (ragdolls.lua's DMS_PrepareModel).
 local function warmUp(ent)
-	if not IsValid(ent) or not wanted(ent) or not possible() or not DMS_HasValveBiped(ent) then return end
-	local model = ent:GetModel()
-	if warm[model] then return end
-	warm[model] = DMS_RagdollFit(model) and 0 or true
-	if warm[model] ~= true then queue[#queue + 1] = model end
+	if not IsValid(ent) or not wanted(ent) or not possible() or not DMS_HasMapped(ent) then return end
+	DMS_PrepareModel(ent:GetModel())
 end
-
-hook.Add("Tick", "DMS_DeathsWarm", function()
-	local model = queue[1]
-	if not model then return end
-	local ok, ms = pcall(DMS.RagdollWarm, model, game.GetWorld():GetPhysicsObject(), warm[model])
-	if ok and ms then
-		warm[model] = warm[model] + 1
-	else
-		warm[model] = true
-		table.remove(queue, 1)
-	end
-end)
 
 hook.Add("OnEntityCreated", "DMS_DeathsWarm", function(ent)
 	if ent:IsNPC() then timer.Simple(0, function() warmUp(ent) end) end

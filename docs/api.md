@@ -27,8 +27,8 @@ folder), `dms_info` prints it all.
 
 | Function | What it does |
 |---|---|
-| `dms.Attach(rag[, opts])` | NM on Homer or on any ValveBiped `prop_ragdoll` (`opts.balance = false`: without `bodyBalance`). A controller, or `nil, reason`. Homer has to be bound to NM's body (spawned through `dms_homer`, `DMS_SpawnHomer` or the spawn menu); a ValveBiped ragdoll gets a body fitted to its model that takes its pose and motion (ADR 0027) |
-| `dms.Detach(rag)` | NM off: armature 0, no drives, an ordinary ragdoll. A ValveBiped one is given back as a new ragdoll in NM's pose and motion: `true, newRagdoll` |
+| `dms.Attach(rag[, opts])` | NM on Homer or on any humanoid `prop_ragdoll` whose skeleton is mapped (ValveBiped, a known rig, a saved mapping: docs/adr/0030) (`opts.balance = false`: without `bodyBalance`). A controller, or `nil, reason`. Homer has to be bound to NM's body (spawned through `dms_homer`, `DMS_SpawnHomer` or the spawn menu); a ValveBiped ragdoll gets a body fitted to its model that takes its pose and motion (ADR 0027) |
+| `dms.Detach(rag)` | NM off: armature 0, no drives, an ordinary ragdoll. A fitted one is given back as a new ragdoll in NM's pose and motion: `true, newRagdoll` |
 | `dms.Get(rag)` | Homer's controller with NM, or `nil` |
 | `dms.All()` | the controllers of every Homer with NM |
 | `dms.Messages()` | the names of all NM messages (behaviours) |
@@ -86,7 +86,7 @@ reaction or a message. The limit is `dms_max_agents` (8): Homers beyond it stay 
 
 ## Death ragdolls (M11, ADR 0028)
 
-An NPC or a player with a ValveBiped model that dies leaves a server ragdoll with NM on it, in the pose and motion it
+An NPC or a player with a humanoid model that dies leaves a server ragdoll with NM on it, in the pose and motion it
 died in; the killing hit goes to it as the Playroom's room takes one on a fatally injured body: `health value=49`, then
 the hit's reaction (`shot`, `blast`, `melee`, `burn`, `taser`): the ShotTask's dying reaction (reaching for the wound,
 `shotRelax`), no getting up, later hits reacting till its health is 0 (the room's death: `STOP all`, `relax`); a death
@@ -109,7 +109,7 @@ needs the fork's hulls (~0.9 s): an NPC's or a player's model is fitted and hull
 
 ## Live bodies (M11.5, ADR 0029)
 
-A ValveBiped NPC shot and not killed becomes a server ragdoll of its model with NM on it (posed from its bones, moving
+A humanoid NPC shot and not killed becomes a server ragdoll of its model with NM on it (posed from its bones, moving
 as it was), the bullet the room's shot (`shot at= dir= weapon= part=`); the NPC itself is hidden meanwhile (not drawn,
 not solid, not thinking or targeted), keeping its health, relationships and weapon. Hits on the ragdoll are the NPC's
 (scaled for the hitgroup by the gamemode, `ScaleNPCDamage`). Once the room's ShotTask is over and the body has settled
@@ -200,12 +200,18 @@ by default). Lua: `DMS_ReactAt(ent, kind, rest, hit, from, impulse)`, the Playro
 | Command | What |
 |---|---|
 | `dms_homer` | Homer in front of the player, NM, `bodyBalance` |
-| `dms_attach` | NM on the Homer or ValveBiped ragdoll the player looks at, as it lies or falls |
-| `dms_detach` | NM off the ragdoll the player looks at (a ValveBiped one moves on with its own physics) |
+| `dms_attach` | NM on the Homer or humanoid ragdoll the player looks at, as it lies or falls |
+| `dms_detach` | NM off the ragdoll the player looks at (a fitted one moves on with its own physics) |
 | `dms_detach_all` | NM off every body |
 | `dms_ragdoll [model]` | a model's ragdoll (default male_07) in front of the player on a fitted body, NM, `bodyBalance` |
-| `dms_fit [model]` | the model's fit: height, mass, warnings (kept by the model and its checksum) |
-| `dms_autoattach_ragdolls 1` | NM on ValveBiped ragdolls spawned from the spawn menu (off by default) |
+| `dms_fit [model]` | the model's fit: its rig, height, mass, warnings (kept by the model, its checksum and mapping) |
+| `dms_rig [model]` | what the model's skeleton is to DMS: its rig (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD, `by names`, `mapped`, `unknown`, `not humanoid`), the bone at each NM joint, what's missing, the reader's report (docs/adr/0030) |
+| `dms_rig_view 1` (client) | NM's bodies (capsules) drawn over the ragdolls with NM near you (superadmins) |
+
+A model's rig made by hand is `data/dms/skeletons/<model path without models/ and .mdl>.json` (docs/adr/0030): a bone
+per NM part, joints moved, parts' sizes, masses and placement on the model. The addon reads it again as the file changes
+and puts NM again on the model's ragdolls by it; copy the file to share it.
+| `dms_autoattach_ragdolls 1` | NM on humanoid ragdolls spawned from the spawn menu (off by default) |
 | `dms_send <line>` | an NM message to the Homer under the crosshair (from the server console: to all) |
 | `dms_react <reaction> [key=value …]` | a reaction of the Homer under the crosshair; without `at=`, the crosshair's point |
 | `dms_status`, `dms_tuning_status` | the agents (NM's step cost, threads, LOD), tuning |

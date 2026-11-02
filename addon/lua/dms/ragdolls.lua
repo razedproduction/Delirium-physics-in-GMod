@@ -1,10 +1,12 @@
--- GMod's ragdolls (ROADMAP M10, docs/adr/0025, 0027): NM on any ValveBiped prop_ragdoll. The model's skeleton is read
--- from its .mdl and Homer's build fitted to it (DMS.RagdollFit, kept by the model and its checksum); the fork makes
+-- GMod's ragdolls (ROADMAP M10–M12, docs/adr/0025, 0027, 0030): NM on any humanoid prop_ragdoll whose skeleton is
+-- mapped (ValveBiped, a known rig, a saved mapping: skeletons.lua). The model's skeleton is read from its .mdl and
+-- Homer's build fitted to it (DMS.RagdollFit, kept by the model, its checksum and mapping); the fork makes
 -- the fitted body natively in the ragdoll's environment (DMS.RagdollBody, VBOX3D_NM_006), posed and moving as the
 -- ragdoll is (or standing in NM's stance), and NM drives it in FOLLOW as it drives Homer. The model's own prop_ragdoll
 -- stays the entity the game sees (networked, traced, damaged, undone): its objects are frozen, without collisions and
--- without their own constraints, and put where their bones are on the NM body every tick; the client finishes the 6
--- bones that have no object (cl_ragdolls.lua). Detaching gives the model its physics back, moving as the NM body was:
+-- without their own constraints, and put where their bones are on the NM body every tick (physics bones no joint is,
+-- hair or coats, carried by their nearest mapped ancestor's part); the client finishes the bones NM has a part for
+-- that have no object (cl_ragdolls.lua; ValveBiped's 6). Detaching gives the model its physics back, moving as the NM body was:
 -- a new ragdoll of the model in its pose (its own constraints can't be put back), the old one gone.
 --
 -- The physgun and the gravity gun grab NM's body (the Playroom's grab, DMS.FollowGrab) instead of the frozen objects;
@@ -13,19 +15,8 @@
 local M = 0.0254
 local say = DMS_Say
 
-local PELVIS = "ValveBiped.Bip01_Pelvis"
--- The bones the client finishes, each kept to a physics bone's frame (cl_ragdolls.lua has the same list).
-local FINISHED = {
-	{ "ValveBiped.Bip01_Spine", "ValveBiped.Bip01_Pelvis" },
-	{ "ValveBiped.Bip01_Spine1", "ValveBiped.Bip01_Pelvis" },
-	{ "ValveBiped.Bip01_Spine4", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_Neck1", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_L_Clavicle", "ValveBiped.Bip01_Spine2" },
-	{ "ValveBiped.Bip01_R_Clavicle", "ValveBiped.Bip01_Spine2" },
-}
-
 local autoattach = CreateConVar("dms_autoattach_ragdolls", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-	"NM on ValveBiped ragdolls spawned from the spawn menu (they balance where they land)")
+	"NM on humanoid ragdolls spawned from the spawn menu (they balance where they land)")
 
 local function V(t) return Vector(t.x, t.y, t.z) end
 local function A(t) return Angle(t.x, t.y, t.z) end
@@ -35,26 +26,87 @@ local function loadData()
 	return pcall(DMS.LoadData, DMS_GameDir())
 end
 
--- A ValveBiped prop_ragdoll (not Homer's own model).
-function DMS_IsValveBiped(ent)
-	return IsValid(ent) and ent:GetClass() == "prop_ragdoll" and ent:GetModel() ~= DMS_HOMER_MODEL
-		and ent:LookupBone(PELVIS) ~= nil and ent:GetPhysicsObjectCount() > 1
+-- A prop_ragdoll of a humanoid model NM can drive (not Homer's own): ValveBiped, a known rig, or one with a saved
+-- mapping (skeletons.lua, ROADMAP M12).
+function DMS_IsMapped(ent)
+	return IsValid(ent) and ent:GetClass() == "prop_ragdoll" and ent:GetPhysicsObjectCount() > 1 and DMS_ModelMapped(ent:GetModel())
 end
 
--- An entity of any class (an NPC, a player) whose model is a ValveBiped one with a ragdoll (not Homer's).
-function DMS_HasValveBiped(ent)
-	return IsValid(ent) and ent:GetModel() ~= DMS_HOMER_MODEL and ent:LookupBone(PELVIS) ~= nil
-		and util.IsValidRagdoll(ent:GetModel())
+-- An entity of any class (an NPC, a player) whose model is such a humanoid with a ragdoll.
+function DMS_HasMapped(ent)
+	return IsValid(ent) and util.IsValidRagdoll(ent:GetModel()) and DMS_ModelMapped(ent:GetModel())
 end
 
--- Homer's build fitted to the model (kept by the module): its fit, or nil and why.
+-- M10–M11.5's names: any mapped humanoid now.
+DMS_IsValveBiped, DMS_HasValveBiped = DMS_IsMapped, DMS_HasMapped
+
+-- Why NM can't drive a ragdoll (for the player): not a ragdoll, not a humanoid, an unknown rig.
+function DMS_WhyNotMapped(ent)
+	if not IsValid(ent) or ent:GetClass() ~= "prop_ragdoll" then return "not a ragdoll" end
+	if ent:GetPhysicsObjectCount() < 2 then return ent:GetModel() .. " has no ragdoll physics" end
+	local c, why = DMS_ModelClass(ent:GetModel())
+	if not c then return why end
+	return c.why ~= "" and c.why or (ent:GetModel() .. ": can't be fitted")
+end
+
+-- Homer's build fitted to the model by its rig, or the player's (saved, or being tried: skeletons.lua), kept by the
+-- module: its fit, or nil and why.
 function DMS_RagdollFit(model)
 	if not loadData() then return nil, "NM's data isn't loaded" end
-	local bytes = file.Read(model, "GAME")
-	if not bytes then return nil, model .. ": not found" end
-	local ok, f = pcall(DMS.RagdollFit, model, bytes)
+	local bytes, why = DMS_ModelBytes(model)
+	if not bytes then return nil, why end
+	local ok, f = pcall(DMS.RagdollFit, model, bytes, DMS_RigArgs(DMS_ModelRig(model)))
 	if not ok then return nil, tostring(f) end
 	return f
+end
+
+-- A model's first NM body makes its 21 hulls in the fork (~0.9 s at once): the fit and the hulls made ahead, a part a
+-- tick (DMS.RagdollWarm), with the players told on a model's first use. Model -> the next part, or true once ready.
+local warm, queue, waiting = {}, {}, {}
+
+-- Starts preparing a model (fit, hulls) in the background; `done(ok, why)` when it's ready (at once if it is).
+function DMS_PrepareModel(model, done)
+	if warm[model] == true then
+		if done then done(true) end
+		return true
+	end
+	if done then
+		waiting[model] = waiting[model] or {}
+		table.insert(waiting[model], done)
+	end
+	if warm[model] then return false end
+	local f, why = DMS_RagdollFit(model)
+	if not f then
+		warm[model] = nil
+		for _, cb in ipairs(waiting[model] or {}) do cb(false, why) end
+		waiting[model] = nil
+		return false, why
+	end
+	warm[model] = 0
+	queue[#queue + 1] = model
+	return false
+end
+
+-- Whether a model's body is ready (fitted, hulls made).
+function DMS_ModelReady(model) return warm[model] == true end
+
+hook.Add("Tick", "DMS_RagdollsWarm", function()
+	local model = queue[1]
+	if not model then return end
+	local ok, ms = pcall(DMS.RagdollWarm, model, game.GetWorld():GetPhysicsObject(), warm[model])
+	if ok and ms then
+		warm[model] = warm[model] + 1
+		return
+	end
+	warm[model] = true
+	table.remove(queue, 1)
+	for _, cb in ipairs(waiting[model] or {}) do cb(true) end
+	waiting[model] = nil
+end)
+
+-- A mapping saved or deleted: the model is fitted again (its hulls too: they're the fitted sizes).
+function DMS_ModelChanged(model)
+	if warm[model] == true then warm[model] = nil end
 end
 
 -- The ragdoll's physics objects with their bones: {name, obj, pos, index}.
@@ -69,20 +121,23 @@ local function objectsOf(ent)
 	return out
 end
 
--- Where a lying or standing ragdoll faces (degrees): forward from its thighs, as NM's face takes it.
-local function facing(objs)
+-- Where a lying or standing ragdoll faces (degrees): forward from its thighs (the fit's `map`), as NM's face takes it.
+local function facing(objs, map)
 	local l, r
 	for _, o in ipairs(objs) do
-		if o.name == "ValveBiped.Bip01_L_Thigh" then l = o.pos end
-		if o.name == "ValveBiped.Bip01_R_Thigh" then r = o.pos end
+		if o.name == map.Thigh_Left then l = o.pos end
+		if o.name == map.Thigh_Right then r = o.pos end
 	end
 	if not l or not r then return 0 end
 	local f = Vector(0, 0, 1):Cross(r - l)
 	return f:Length() > 0.1 and f:Angle().y or 0
 end
 
--- Where a ValveBiped ragdoll faces (degrees), as NM's face takes it.
-function DMS_RagdollFacing(ent) return facing(objectsOf(ent)) end
+-- Where a humanoid ragdoll faces (degrees), as NM's face takes it.
+function DMS_RagdollFacing(ent)
+	local f = DMS_RagdollFit(ent:GetModel())
+	return f and facing(objectsOf(ent), f.map) or 0
+end
 
 -- The model's look while NM drives it: its objects frozen, without collisions and gravity, its own joints gone (or
 -- Source's separation fix pulls the posed objects back, ADR 0025).
@@ -98,11 +153,11 @@ local function hold(ent)
 	end
 end
 
--- NM on a ValveBiped ragdoll: the fitted body takes its pose and every part's velocity (a falling ragdoll keeps
+-- NM on a humanoid ragdoll: the fitted body takes its pose and every part's velocity (a falling ragdoll keeps
 -- falling), or with `stand` ({pos, yaw}: units, degrees) stands in NM's stance there. The agent's id, or nil and why.
 function DMS_AttachRagdoll(ent, stand)
 	if ent.DMS_Agent then return ent.DMS_Agent end
-	if not DMS_IsValveBiped(ent) then return nil, "not a ValveBiped ragdoll" end
+	if not DMS_IsMapped(ent) then return nil, DMS_WhyNotMapped(ent) end
 	local room, full = DMS_AgentRoom()
 	if not room then return nil, full end
 	local model = ent:GetModel()
@@ -127,7 +182,7 @@ function DMS_AttachRagdoll(ent, stand)
 	if stand then
 		yaw, floor = stand.yaw, stand.pos
 	else
-		yaw = facing(objs)
+		yaw = facing(objs, f.map)
 		local p = ent:GetPhysicsObjectNum(0):GetPos()
 		floor = DMS_FloorBelow(p, ent) or p
 	end
@@ -145,10 +200,17 @@ function DMS_AttachRagdoll(ent, stand)
 	for _, o in ipairs(objs) do bones[o.index] = o.name end
 	ent.DMS_Agent, ent.DMS_Native, ent.DMS_Fit, ent.DMS_FitBones = id, handle, model, f.bones
 	ent.DMS_PhysBones, ent.DMS_Spawn, ent.DMS_Bound, ent.DMS_NativeMs = bones, { pos = floor, yaw = yaw }, true, ms
+	ent.DMS_Finish = f.finish
 	DMS_Agents[id] = ent
+	-- The bones the client puts right (cl_ragdolls.lua), "bone>physics parent" each, and the pelvis for its camera.
+	local fin = {}
+	for k, b in ipairs(f.finish) do fin[k] = b[1] .. ">" .. b[2] end
+	ent:SetNW2String("DMS_Finish", table.concat(fin, ";"))
+	ent:SetNW2String("DMS_Pelvis", f.map.Buttocks or "")
 	ent:SetNW2Bool("DMS_Ragdoll", true)
 	ent:SetNW2Float("DMS_FitHeight", f.height)
 	ent:SetNW2Float("DMS_FitMass", f.mass)
+	ent:SetNW2String("DMS_FitRig", f.rig)
 	ent:SetNW2String("DMS_FitWarn", table.concat(f.warnings, "; "))
 	-- Off (and the NM body gone) before the ragdoll goes.
 	ent:CallOnRemove("DMS_Unfollow", function(e) DMS_Unfollow(e) end)
@@ -256,7 +318,7 @@ hook.Add("Tick", "DMS_Ragdolls", function()
 						p:SetAngles(A(b.ang))
 					end
 				end
-				for k, f in ipairs(FINISHED) do
+				for k, f in ipairs(ent.DMS_Finish or {}) do
 					local b, par = pose[f[1]], pose[f[2]]
 					if b and par then
 						local lp, la = WorldToLocal(V(b.pos), A(b.ang), V(par.pos), A(par.ang))
@@ -349,13 +411,36 @@ hook.Add("Think", "DMS_RagdollGrab", function()
 	end
 end)
 
+-- `fn()` once `model` is ready for NM (at once if it is); on its first use the player is told it's being fitted in the
+-- background, and `fn(nil, why)` if it can't be.
+function DMS_WhenReady(model, ply, fn)
+	if DMS_ModelReady(model) then return fn() end
+	local started = SysTime()
+	local tell = function(text)
+		if IsValid(ply) then ply:ChatPrint(text) else print(text) end
+	end
+	tell("[DMS] " .. model .. ": first use, fitting NM's body to it in the background...")
+	DMS_PrepareModel(model, function(ok, why)
+		if not ok then
+			tell("[DMS] " .. model .. ": " .. tostring(why))
+			return fn(nil, why)
+		end
+		local f = DMS_RagdollFit(model)
+		tell(string.format("[DMS] %s: ready in %.1f s (%s, %.2f m, %.1f kg)%s", model, SysTime() - started, f and f.rig or "?",
+			f and f.height or 0, f and f.mass or 0, f and #f.warnings > 0 and (": " .. table.concat(f.warnings, "; ")) or ""))
+		fn()
+	end)
+end
+
 -- Ragdolls spawned from the spawn menu, with dms_autoattach_ragdolls.
-hook.Add("PlayerSpawnedRagdoll", "DMS_Ragdolls", function(ply, _, ent)
-	if not autoattach:GetBool() or not DMS_IsValveBiped(ent) then return end
-	timer.Simple(0, function()
-		if not IsValid(ent) then return end
-		local id, why = DMS_AttachRagdoll(ent)
-		if id then DMS_Send(ent, "bodyBalance start=true") else DMS_Say(ply, "[DMS] NM isn't on the ragdoll: " .. tostring(why)) end
+hook.Add("PlayerSpawnedRagdoll", "DMS_Ragdolls", function(ply, model, ent)
+	if not autoattach:GetBool() or not DMS_IsMapped(ent) then return end
+	DMS_WhenReady(ent:GetModel(), ply, function(_, failed)
+		timer.Simple(0, function()
+			if failed or not IsValid(ent) then return end
+			local id, why = DMS_AttachRagdoll(ent)
+			if id then DMS_Send(ent, "bodyBalance start=true") else DMS_Say(ply, "[DMS] NM isn't on the ragdoll: " .. tostring(why)) end
+		end)
 	end)
 end)
 
@@ -383,24 +468,33 @@ local function admin(ply) return not IsValid(ply) or ply:IsSuperAdmin() end
 concommand.Add("dms_ragdoll", function(ply, _, args)
 	if not admin(ply) then return end
 	local model = args[1] or "models/humans/group01/male_07.mdl"
-	local pos, yaw = Vector(0, 0, 0), 0
-	if IsValid(ply) then
-		local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 150, filter = ply })
-		pos, yaw = DMS_FloorAt(tr.HitPos, ply), ply:EyeAngles().y + 180
+	if not util.IsValidModel(model) then return say(ply, "[DMS] dms_ragdoll: " .. model .. ": no such model") end
+	if not DMS_ModelMapped(model) then
+		local c, why = DMS_ModelClass(model)
+		return say(ply, "[DMS] dms_ragdoll: " .. tostring(c and c.why or why))
 	end
-	local ent, why = DMS_SpawnRagdoll(model, pos, yaw)
-	if not ent then return say(ply, "[DMS] dms_ragdoll: " .. tostring(why)) end
-	if IsValid(ply) then
-		undo.Create("DMS ragdoll")
-		undo.AddEntity(ent)
-		undo.SetPlayer(ply)
-		undo.Finish()
-		ply:AddCleanup("ragdolls", ent)
-	end
-	DMS_Send(ent, "bodyBalance start=true")
-	say(ply, string.format("[DMS] %s: %.2f m, %.1f kg, NM agent #%d, its body made in %.1f ms%s", model, ent:GetNW2Float("DMS_FitHeight"),
-		ent:GetNW2Float("DMS_FitMass"), ent.DMS_Agent, ent.DMS_NativeMs or 0,
-		ent:GetNW2String("DMS_FitWarn") ~= "" and (" (" .. ent:GetNW2String("DMS_FitWarn") .. ")") or ""))
+	local console = not IsValid(ply)
+	DMS_WhenReady(model, ply, function(_, failed)
+		if failed or (not console and not IsValid(ply)) then return end
+		local pos, yaw = Vector(0, 0, 0), 0
+		if IsValid(ply) then
+			local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 150, filter = ply })
+			pos, yaw = DMS_FloorAt(tr.HitPos, ply), ply:EyeAngles().y + 180
+		end
+		local ent, why = DMS_SpawnRagdoll(model, pos, yaw)
+		if not ent then return say(ply, "[DMS] dms_ragdoll: " .. tostring(why)) end
+		if IsValid(ply) then
+			undo.Create("DMS ragdoll")
+			undo.AddEntity(ent)
+			undo.SetPlayer(ply)
+			undo.Finish()
+			ply:AddCleanup("ragdolls", ent)
+		end
+		DMS_Send(ent, "bodyBalance start=true")
+		say(ply, string.format("[DMS] %s: %s, %.2f m, %.1f kg, NM agent #%d, its body made in %.1f ms%s", model, ent:GetNW2String("DMS_FitRig"),
+			ent:GetNW2Float("DMS_FitHeight"), ent:GetNW2Float("DMS_FitMass"), ent.DMS_Agent, ent.DMS_NativeMs or 0,
+			ent:GetNW2String("DMS_FitWarn") ~= "" and (" (" .. ent:GetNW2String("DMS_FitWarn") .. ")") or ""))
+	end)
 end)
 
 -- dms_fit <model>: the model's fit (sizes, mass, warnings), without making anything.
@@ -409,6 +503,6 @@ concommand.Add("dms_fit", function(ply, _, args)
 	local model = args[1] or "models/humans/group01/male_07.mdl"
 	local f, why = DMS_RagdollFit(model)
 	if not f then return say(ply, "[DMS] dms_fit: " .. tostring(why)) end
-	say(ply, string.format("[DMS] %s: %.3f m, %.1f kg (Homer %.3f m, %.1f kg), %s in %.2f ms%s", model, f.height, f.mass, f.homer_height,
+	say(ply, string.format("[DMS] %s: %s, %.3f m, %.1f kg (Homer %.3f m, %.1f kg), %s in %.2f ms%s", model, f.rig, f.height, f.mass, f.homer_height,
 		f.homer_mass, f.cached and "cached" or "fitted", f.ms, #f.warnings > 0 and ("\n  " .. table.concat(f.warnings, "\n  ")) or ""))
 end)

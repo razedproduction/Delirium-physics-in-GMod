@@ -348,26 +348,36 @@ end)
 
 local function admin(ply) return not IsValid(ply) or ply:IsSuperAdmin() end
 
--- The Homer or ValveBiped ragdoll the player looks at (or the only one / all for the server console).
+-- The Homer or humanoid ragdoll the player looks at (or the only one / all for the server console).
 local function aimed(ply)
 	if not IsValid(ply) then return nil end
 	local tr = ply:GetEyeTrace()
 	local ent = tr.Entity
-	if IsValid(ent) and (ent:GetModel() == DMS_HOMER_MODEL or DMS_IsValveBiped(ent)) then return ent, tr end
+	if IsValid(ent) and (ent:GetModel() == DMS_HOMER_MODEL or DMS_IsMapped(ent)) then return ent, tr end
 end
 
-local LOOK = "look at a Homer ragdoll (" .. DMS_HOMER_MODEL .. ") or any ValveBiped ragdoll"
+local LOOK = "look at a Homer ragdoll (" .. DMS_HOMER_MODEL .. ") or any humanoid ragdoll"
 
--- dms_attach: NM on the ragdoll looked at (balancing): Homer, or any ValveBiped model (ragdolls.lua), as it lies.
+-- dms_attach: NM on the ragdoll looked at (balancing): Homer, or any humanoid model (ragdolls.lua), as it lies.
 concommand.Add("dms_attach", function(ply)
 	if not admin(ply) then return end
 	local ent = aimed(ply)
-	if not ent then return say(ply, "[DMS] dms_attach: " .. LOOK) end
-	local c, why = dms.Attach(ent)
-	if not c then return say(ply, "[DMS] dms_attach: " .. tostring(why)) end
-	local fit = ent.DMS_Native and string.format(" (fitted body: %.2f m, %.1f kg%s)", ent:GetNW2Float("DMS_FitHeight"), ent:GetNW2Float("DMS_FitMass"),
-		ent:GetNW2String("DMS_FitWarn") ~= "" and ("; " .. ent:GetNW2String("DMS_FitWarn")) or "") or ""
-	say(ply, "[DMS] NM on " .. tostring(ent) .. fit)
+	if not ent then
+		local tr = IsValid(ply) and ply:GetEyeTrace()
+		local why = tr and IsValid(tr.Entity) and tr.Entity:GetClass() == "prop_ragdoll" and DMS_WhyNotMapped(tr.Entity)
+		return say(ply, "[DMS] dms_attach: " .. (why or LOOK))
+	end
+	local function attach()
+		if not IsValid(ent) then return end
+		local c, why = dms.Attach(ent)
+		if not c then return say(ply, "[DMS] dms_attach: " .. tostring(why)) end
+		local fit = ent.DMS_Native and string.format(" (fitted body, %s: %.2f m, %.1f kg%s)", ent:GetNW2String("DMS_FitRig"), ent:GetNW2Float("DMS_FitHeight"),
+			ent:GetNW2Float("DMS_FitMass"), ent:GetNW2String("DMS_FitWarn") ~= "" and ("; " .. ent:GetNW2String("DMS_FitWarn")) or "") or ""
+		say(ply, "[DMS] NM on " .. tostring(ent) .. fit)
+	end
+	-- A model's first use: its body fitted in the background first (ROADMAP M12).
+	if ent:GetModel() == DMS_HOMER_MODEL then return attach() end
+	DMS_WhenReady(ent:GetModel(), ply, function(_, failed) if not failed then attach() end end)
 end)
 
 -- dms_detach: NM off the ragdoll looked at (an ordinary ragdoll, moving on as it was).

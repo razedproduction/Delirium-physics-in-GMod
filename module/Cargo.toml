@@ -14,5 +14,7 @@ delirium = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/c
 delirium-data = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-data" }
 delirium-sdk = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-sdk" }
 dms-game = { path = "../tools/dms-game" }
+# The fit to any humanoid model, shared with the rig editor (tools/dms-rig, docs/adr/0030).
+dms-fit = { path = "../tools/dms-fit" }
 # Only its hulls (NM's capsules and boxes as VPhysics-Box3D grows them), for the native bodies (ROADMAP M9).
 dms-homer = { path = "../tools/dms-homer" }

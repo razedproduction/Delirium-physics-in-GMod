@@ -286,10 +286,10 @@ local function homerTab(p)
 	local auto = check(p, "NM on Homers spawned from the spawn menu", switchHelp("autoattach"), function(v) switch("autoattach", v and 1 or 0) end)
 	bindSwitch("autoattach", function(v) auto:SetChecked(tonumber(v) ~= 0) end)
 
-	heading(p, "Any ragdoll (ValveBiped models)")
-	note(p, "NM on GMod's own ragdolls: HL2's citizens, combine, Alyx, player models. Homer's body is fitted to the model's skeleton (sizes, masses) and NM drives it as it drives Homer; the model keeps its look. Getting up by animation is Homer's only: a fitted body stays down.")
+	heading(p, "Any ragdoll (humanoid models)")
+	note(p, "NM on GMod's ragdolls and the Workshop's: HL2's citizens, combine, Alyx, player models, any humanoid whose skeleton DMS knows (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD, or by its bones' names) or has a rig for in data/dms/skeletons (reloaded as the file changes). Homer's body is fitted to the model's skeleton (sizes, masses) and NM drives it as it drives Homer; the model keeps its look. A model's first use fits it in the background (a second). Getting up by animation is Homer's only: a fitted body stays down.")
 	local g = row(p)
-	local on = button(g, "NM on the ragdoll you look at", "Puts NM on the ragdoll under your crosshair, as it lies or falls: Homer, or any ValveBiped model (its fit is shown below).\n\ndms_attach", function() RunConsoleCommand("dms_attach") end)
+	local on = button(g, "NM on the ragdoll you look at", "Puts NM on the ragdoll under your crosshair, as it lies or falls: Homer, or any mapped humanoid model (its fit is shown below).\n\ndms_attach", function() RunConsoleCommand("dms_attach") end)
 	on:Dock(LEFT)
 	on:SetWide(180)
 	local offr = button(g, "NM off the ragdoll you look at", "Takes NM off: the model gets its own physics back, moving on as it was.\n\ndms_detach", function() RunConsoleCommand("dms_detach") end)
@@ -308,7 +308,7 @@ local function homerTab(p)
 		local text
 		if IsValid(ent) and ent:GetNW2Bool("DMS_Ragdoll") then
 			local warn = ent:GetNW2String("DMS_FitWarn")
-			text = string.format("Under your crosshair: %s, fitted %.2f m, %.1f kg (Homer 1.77 m, 77.7 kg)%s", ent:GetModel(),
+			text = string.format("Under your crosshair: %s (%s), fitted %.2f m, %.1f kg (Homer 1.77 m, 77.7 kg)%s", ent:GetModel(), ent:GetNW2String("DMS_FitRig"),
 				ent:GetNW2Float("DMS_FitHeight"), ent:GetNW2Float("DMS_FitMass"), warn ~= "" and ("\nWarnings: " .. warn) or "")
 		elseif IsValid(ent) and ent:GetClass() == "prop_ragdoll" then
 			text = "Under your crosshair: " .. ent:GetModel() .. " (no NM on it: its fit shows once it has)"
@@ -317,7 +317,7 @@ local function homerTab(p)
 		end
 		if text ~= self:GetText() then self:SetText(text) end
 	end
-	local autor = check(p, "NM on ValveBiped ragdolls spawned from the spawn menu", "They balance where they land.\n\ndms_autoattach_ragdolls")
+	local autor = check(p, "NM on humanoid ragdolls spawned from the spawn menu", "They balance where they land.\n\ndms_autoattach_ragdolls")
 	autor:SetConVar("dms_autoattach_ragdolls")
 	for _, c in ipairs({
 		{ "autoattach_npc", "NM on killed NPCs' ragdolls" },
@@ -343,6 +343,7 @@ local function homerTab(p)
 		{ "Eyebrows", "dms_brows", "Homer's eyebrows, the Playroom's." },
 		{ "Skeleton", "dms_skeleton", "The Playroom's skeleton drawn over Homer." },
 		{ "Debug overlay", "dms_overlay", "NM's capsules, drives and centre of mass over Homer (superadmins)." },
+		{ "NM's bodies over ragdolls", "dms_rig_view", "The fitted NM bodies (capsules) drawn over the ragdolls with NM near you, as NM has them: to check a model's rig (superadmins)." },
 	}) do
 		check(p, c[1], c[3] .. "\n\n" .. c[2]):SetConVar(c[2])
 	end
