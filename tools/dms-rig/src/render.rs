@@ -72,8 +72,25 @@ impl Camera {
 
     /// World to clip space for a view `aspect` wide.
     pub fn matrix(&self, aspect: f32) -> Mat4 {
-        let proj = Mat4::perspective_rh_gl(50f32.to_radians(), aspect.max(0.01), 0.02, 200.0);
-        proj * Mat4::look_at_rh(self.eye(), self.target, Vec3::Z)
+        // OpenGL's right-handed perspective and look-at, written out.
+        let (near, far, f) = (0.02f32, 200.0f32, 1.0 / (25f32.to_radians()).tan());
+        let proj = Mat4::from_cols(
+            Vec4::new(f / aspect.max(0.01), 0.0, 0.0, 0.0),
+            Vec4::new(0.0, f, 0.0, 0.0),
+            Vec4::new(0.0, 0.0, (far + near) / (near - far), -1.0),
+            Vec4::new(0.0, 0.0, 2.0 * far * near / (near - far), 0.0),
+        );
+        let eye = self.eye();
+        let fw = (self.target - eye).normalize();
+        let s = fw.cross(Vec3::Z).normalize_or(Vec3::Y);
+        let u = s.cross(fw);
+        let view = Mat4::from_cols(
+            Vec4::new(s.x, u.x, -fw.x, 0.0),
+            Vec4::new(s.y, u.y, -fw.y, 0.0),
+            Vec4::new(s.z, u.z, -fw.z, 0.0),
+            Vec4::new(-s.dot(eye), -u.dot(eye), fw.dot(eye), 1.0),
+        );
+        proj * view
     }
 }
 
@@ -153,11 +170,13 @@ precision mediump float;
 in vec3 v_normal;
 in vec4 v_color;
 uniform float u_lit;
+uniform float u_alpha;
 out vec4 o_color;
 void main() {
     vec3 n = normalize(v_normal);
-    float l = mix(1.0, 0.35 + 0.65 * max(dot(n, normalize(vec3(0.4, 0.3, 0.85))), 0.0) + 0.15 * max(dot(n, normalize(vec3(-0.5, -0.6, 0.2))), 0.0), u_lit);
-    o_color = vec4(v_color.rgb * l, v_color.a);
+    // Two-sided: a mesh seen from inside is lit as from outside.
+    float l = mix(1.0, 0.35 + 0.65 * abs(dot(n, normalize(vec3(0.4, 0.3, 0.85)))) + 0.15 * max(dot(n, normalize(vec3(-0.5, -0.6, 0.2))), 0.0), u_lit);
+    o_color = vec4(v_color.rgb * l, v_color.a * u_alpha);
 }
 "#;
 
@@ -176,6 +195,8 @@ pub struct Scene {
     pub m: Mat4,
     pub mesh: Option<Arc<Batch>>,
     pub mesh_version: u64,
+    /// The mesh's opacity: below 1 it's drawn after the solid batches without writing depth, the parts seen through.
+    pub mesh_alpha: f32,
     pub batches: Vec<Batch>,
 }
 
@@ -247,7 +268,7 @@ impl Renderer {
         let gl = painter.gl();
         if self.gpu.is_none() {
             // SAFETY: as in `init`.
-            match unsafe { Renderer::init(gl, painter.shader_version().version_declaration()) } {
+            match unsafe { Renderer::init(gl, "#version 140") } {
                 Ok(g) => self.gpu = Some(g),
                 Err(e) => {
                     eprintln!("dms-rig: the 3D view's shaders: {e}");
@@ -274,7 +295,31 @@ impl Renderer {
             gl.use_program(Some(g.program));
             gl.uniform_matrix_4_f32_slice(gl.get_uniform_location(g.program, "u_m").as_ref(), false, &scene.m.to_cols_array());
             let lit = gl.get_uniform_location(g.program, "u_lit");
-            // The mesh, kept on the GPU.
+            let alpha = gl.get_uniform_location(g.program, "u_alpha");
+            gl.uniform_1_f32(alpha.as_ref(), 1.0);
+            let clear = |b: &Batch| b.verts.first().is_some_and(|v| v.color[3] < 1.0);
+            let draw = |g: &Gpu, b: &Batch| {
+                if b.idx.is_empty() {
+                    return;
+                }
+                gl.depth_mask(!clear(b) && !b.on_top);
+                if b.on_top {
+                    gl.disable(glow::DEPTH_TEST);
+                } else {
+                    gl.enable(glow::DEPTH_TEST);
+                }
+                gl.uniform_1_f32(lit.as_ref(), if b.lines { 0.0 } else { 1.0 });
+                gl.bind_vertex_array(Some(g.vao));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(g.vbo));
+                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(g.ebo));
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&b.verts), glow::STREAM_DRAW);
+                gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&b.idx), glow::STREAM_DRAW);
+                gl.draw_elements(if b.lines { glow::LINES } else { glow::TRIANGLES }, b.idx.len() as i32, glow::UNSIGNED_INT, 0);
+            };
+            // Solid first, then the mesh, then what's translucent, then what's on top.
+            for b in scene.batches.iter().filter(|b| !b.on_top && !clear(b)) {
+                draw(g, b);
+            }
             if let Some(mesh) = &scene.mesh {
                 if g.mesh.as_ref().is_none_or(|m| m.4 != scene.mesh_version) {
                     if let Some((vao, vbo, ebo, _, _)) = g.mesh.take() {
@@ -293,32 +338,20 @@ impl Renderer {
                     }
                 }
                 if let Some((vao, _, _, n, _)) = g.mesh {
+                    gl.enable(glow::DEPTH_TEST);
+                    gl.depth_mask(scene.mesh_alpha >= 1.0);
                     gl.uniform_1_f32(lit.as_ref(), 1.0);
+                    gl.uniform_1_f32(alpha.as_ref(), scene.mesh_alpha);
                     gl.bind_vertex_array(Some(vao));
                     gl.draw_elements(glow::TRIANGLES, n, glow::UNSIGNED_INT, 0);
+                    gl.uniform_1_f32(alpha.as_ref(), 1.0);
                 }
             }
-            // This frame's: solid first, then translucent without depth writes, then what's on top.
-            gl.bind_vertex_array(Some(g.vao));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(g.vbo));
-            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(g.ebo));
-            let mut order: Vec<&Batch> = scene.batches.iter().collect();
-            order.sort_by_key(|b| (b.on_top, b.verts.first().is_some_and(|v| v.color[3] < 1.0)));
-            for b in order {
-                if b.idx.is_empty() {
-                    continue;
-                }
-                let clear = b.verts.first().is_some_and(|v| v.color[3] < 1.0);
-                gl.depth_mask(!clear && !b.on_top);
-                if b.on_top {
-                    gl.disable(glow::DEPTH_TEST);
-                } else {
-                    gl.enable(glow::DEPTH_TEST);
-                }
-                gl.uniform_1_f32(lit.as_ref(), if b.lines { 0.0 } else { 1.0 });
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&b.verts), glow::STREAM_DRAW);
-                gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes(&b.idx), glow::STREAM_DRAW);
-                gl.draw_elements(if b.lines { glow::LINES } else { glow::TRIANGLES }, b.idx.len() as i32, glow::UNSIGNED_INT, 0);
+            for b in scene.batches.iter().filter(|b| !b.on_top && clear(b)) {
+                draw(g, b);
+            }
+            for b in scene.batches.iter().filter(|b| b.on_top) {
+                draw(g, b);
             }
             gl.bind_vertex_array(None);
             gl.depth_mask(true);

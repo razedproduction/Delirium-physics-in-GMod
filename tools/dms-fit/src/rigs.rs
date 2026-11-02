@@ -44,11 +44,11 @@ impl Class {
     /// Why it can't be fitted, for the player.
     pub fn why(&self, model: &str) -> String {
         if !self.humanoid() {
-            return format!("{model} isn't a humanoid: no pelvis, spine, two legs and two arms found (animals and robots without a humanoid chain aren't supported); if it is one, map its bones in the DMS window (Skeletons)");
+            return format!("{model} isn't a humanoid: no pelvis, spine, two legs and two arms found (animals and robots without a humanoid chain aren't supported); if it is one, make its rig in the rig editor (dms-rig)");
         }
         let mut what: Vec<String> = self.missing.iter().map(|p| format!("no {p}")).collect();
         what.extend(self.problems.iter().cloned());
-        format!("{model}: {} skeleton, {}: map its bones in the DMS window (Skeletons)", self.rig, what.join(", "))
+        format!("{model}: {} skeleton, {}: make its rig in the rig editor (dms-rig)", self.rig, what.join(", "))
     }
 }
 

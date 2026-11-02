@@ -30,7 +30,6 @@ struct Entry {
 
 /// The game's files by path (lower case, `/`), the first found winning as the game's search path does.
 pub struct GameFs {
-    pub gmod: PathBuf,
     pub sources: Vec<Source>,
     files: HashMap<String, Entry>,
     /// What couldn't be read (a broken GMA), for the status line.
@@ -64,7 +63,7 @@ impl GameFs {
         if !gm.is_dir() {
             return Err(format!("{}: not Garry's Mod's folder (no garrysmod\\)", gmod.display()));
         }
-        let mut fs = GameFs { gmod: gmod.to_path_buf(), sources: vec![], files: HashMap::new(), problems: vec![] };
+        let mut fs = GameFs { sources: vec![], files: HashMap::new(), problems: vec![] };
         // The game's own search path first: its loose files, the legacy addons, its VPK, the engine's content.
         fs.add_loose(&gm, "garrysmod");
         if let Ok(rd) = std::fs::read_dir(gm.join("addons")) {
@@ -258,10 +257,6 @@ impl GameFs {
             }
             At::Gma { file, offset, len } => range(file, *offset, *len),
         }
-    }
-
-    pub fn exists(&self, path: &str) -> bool {
-        self.files.contains_key(&norm(path))
     }
 
     /// Every model (`models/*.mdl`) and where it comes from, sorted.

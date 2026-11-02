@@ -61,6 +61,10 @@ pub struct Host {
     pub nm: Nm,
 }
 
+// SAFETY: vphysics' interfaces are process-wide singletons; the editor calls them from its UI thread only.
+unsafe impl Send for Host {}
+unsafe impl Sync for Host {}
+
 unsafe fn slot(this: *mut c_void, i: usize) -> *const () {
     // SAFETY: a live C++ object, its first field the vtable (the caller's promise); the slot is in it.
     unsafe { *(*(this as *const *const *const ())).add(i) }

@@ -14,4 +14,6 @@ dms-game = { path = "../dms-game" }
 dms-homer = { path = "../dms-homer" }
 dms-vphysics = { path = "../dms-vphysics" }
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+# The --screenshot PNG.
+image = { version = "0.25", default-features = false, features = ["png"] }

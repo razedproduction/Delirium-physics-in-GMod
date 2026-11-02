@@ -21,7 +21,9 @@ usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphys
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
   --vphysics  the fork's vphysics.dll (default: Garry's Mod's bin\\win64, else the repository's vphysics\\build)
   --model     a model to open at once
-  --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)";
+  --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
+  --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
+  --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)";
 
 /// Homer from the player's GTA IV as the module loads him (`module/src/data.rs`): his build and body, NM's surfaces.
 pub struct Homer {
@@ -90,9 +92,33 @@ fn run() -> Result<(), String> {
     let vphysics = take("--vphysics").map(PathBuf::from);
     let model = take("--model");
     let shot = take("--screenshot").map(PathBuf::from);
+    let classify = take("--classify");
+    let bones = take("--bones");
     let steps = take("--sim").map(|s| s.parse::<u64>().map_err(|e| format!("--sim {s}: {e}"))).transpose()?;
     if !args.is_empty() {
         return Err(format!("unknown arguments {args:?}\n{USAGE}"));
+    }
+    if let Some(model) = bones {
+        let fs = gamefs::GameFs::open(&gmod)?;
+        let s = dms_fit::skeleton::read_mdl(&fs.read(&model)?)?;
+        for (i, b) in s.bones.iter().enumerate() {
+            let parent = b.parent.map_or("-".to_string(), |p| s.bones[p].name.clone());
+            let p = b.pose.0;
+            println!("{i}\t{}\t{parent}\t{:.1} {:.1} {:.1}\tphysics {}", b.name, p.x, p.y, p.z, b.physics);
+        }
+        return Ok(());
+    }
+    if let Some(filter) = classify {
+        // The models' classes as the module sees them, without a window: which need a rig made by hand.
+        let fs = gamefs::GameFs::open(&gmod)?;
+        for (p, s) in fs.models().into_iter().filter(|(p, s)| p.contains(&filter) || fs.sources[*s].name.contains(&filter)) {
+            let c = fs.read(&p).and_then(|b| dms_fit::skeleton::read_mdl(&b)).and_then(|sk| {
+                let at: Vec<_> = sk.bones.iter().map(|b| b.bind.0).collect();
+                dms_fit::rigs::classify(&sk, None, &at).map(|c| if c.complete() { c.rig } else { format!("{}: {}", c.rig, c.why(&p)) })
+            });
+            println!("{p}\t{}\t{}", c.unwrap_or_else(|e| format!("error: {e}")), fs.sources[s].name);
+        }
+        return Ok(());
     }
     println!("dms-rig: Homer from {}", game.display());
     let homer = load_homer(&game)?;

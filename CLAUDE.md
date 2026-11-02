@@ -95,6 +95,8 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 - `addon/lua/` — серверный Lua: `autorun/server/dms_init.lua` (`require("dms")`), `dms/*.lua`.
 - `vphysics/` — форк VPhysics-Box3D (C++, CMake, MIT); сабмодули `vphysics/external/*` (`git submodule update --init`).
 - `scripts/`, `docs/adr/`, `tools/` (появится в M3).
+- `tools/dms-vphysics` — FFI `IPhysicsNM`, привязка и нативное тело без Lua, хост форка вне игры (ADR 0031); общий для
+  модуля и `tools/dms-rig` (редактор ригов на egui, [docs/rig-editor.md](docs/rig-editor.md)).
 
 Инварианты:
 - Внутри step-callback (`SetStepCallback`, внутри `Simulate`) — **никакого Lua и игровых вызовов**, только методы
