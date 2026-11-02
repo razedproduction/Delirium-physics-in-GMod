@@ -9,7 +9,7 @@ use std::ffi::{CStr, c_int};
 use delirium::prelude::*;
 
 use crate::data;
-use crate::ffi::vphysics_nm::{self, IPhysicsObject, Nm, Version};
+use crate::ffi::vphysics_nm::{self, IPhysicsObject, Version};
 use crate::lua::{self, Api, LuaState, TTABLE, native};
 
 pub const NATIVES: &[(&CStr, lua::CFunction)] = &[(c"BindHomer", bind_homer), (c"HomerBody", homer_body)];
@@ -29,13 +29,6 @@ unsafe fn parts(api: &Api, l: *mut LuaState, arg: c_int, count: usize) -> Result
         .collect()
 }
 
-/// A body's frame from its state: the centre of mass is the part's centre (`dms-homer`'s `.phy`).
-fn pose(nm: &Nm, object: *mut IPhysicsObject) -> Result<(Vec3, Quat), String> {
-    // SAFETY: a PhysObj Lua handed over, alive for this call.
-    let s = unsafe { nm.body_state(object) }.ok_or("GetBodyState failed")?;
-    Ok((Vec3::from_array(s.position), Quat::from_array(s.rotation).normalize()))
-}
-
 native!(bind_homer => bind_homer_impl);
 /// `DMS.BindHomer(parts)`: `parts` the ragdoll's 21 PhysObj in NM's part order, standing as it was spawned. Gives
 /// every body NM's inertia tensor (`SetBodyInertia`) and every joint NM's pivot, frames and limits (a ball
@@ -51,59 +44,23 @@ unsafe fn bind_homer_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> 
     unsafe { bind_body(api, l, &d.body, &objects) }
 }
 
-/// Binds `objects` (a ragdoll's bodies in NM's part order, standing as spawned) to `body`: Homer's, or one fitted to
-/// a model (ROADMAP M9). Pushes the joints' table as `DMS.BindHomer` does.
+/// Binds `objects` (a ragdoll's bodies in NM's part order, standing as spawned) to `body` (`dms_vphysics::body::bind`,
+/// shared with the rig editor). Pushes the joints' table as `DMS.BindHomer` does.
 ///
 /// # Safety
 /// `l` is a live Lua state, called from its own thread; the objects are live.
 pub unsafe fn bind_body(api: &Api, l: *mut LuaState, body: &dms_game::body::Body, objects: &[*mut IPhysicsObject]) -> Result<c_int, String> {
     let nm = vphysics_nm::get().ok_or("IPhysicsNM isn't available (vphysics.dll isn't VPhysics-Box3D)")?;
-    if nm.version < Version::V004 {
-        return Err(format!("{} has no SetBodyMaterial (or SetBodyInertia / SetJointBallLimits): update VPhysics-Box3D", nm.version.name()));
-    }
-    let poses = objects.iter().map(|&o| pose(&nm, o)).collect::<Result<Vec<_>, _>>()?;
-    for (p, &o) in body.parts.iter().zip(objects) {
-        // Symmetric: its columns are its rows.
-        let tensor = p.inertia.to_cols_array();
-        // SAFETY: a PhysObj of the ragdoll, alive for this call; 9 floats.
-        if unsafe { nm.set_body_inertia(o, &tensor) } != Some(true) {
-            return Err(format!("{}: SetBodyInertia refused NM's tensor {tensor:?}", p.name));
-        }
-        // NM's contact material of the part (ROADMAP M5): its friction and elasticity against NM's surfaces.
-        let (friction, elasticity) = dms_game::body::part_material(&p.bone);
-        // SAFETY: as above.
-        if unsafe { nm.set_body_material(o, friction, elasticity) } != Some(true) {
-            return Err(format!("{}: SetBodyMaterial refused {friction} {elasticity}", p.name));
-        }
-    }
-    unsafe { (api.createtable)(l, body.joints.len() as c_int, 0) };
-    for (k, j) in body.joints.iter().enumerate() {
-        let name = body.parts[j.part].name;
-        let (parent, child) = (objects[j.parent], objects[j.part]);
-        // SAFETY: both are PhysObj of the ragdoll, alive for this call.
-        let c = unsafe { nm.find_constraint(parent, child) };
-        if c.is_null() {
-            return Err(format!("{name}: no constraint to {} (not models/dms/homer.mdl?)", body.parts[j.parent].name));
-        }
-        let (pivot, frames) = body.joint_world(j, &poses);
-        // SAFETY: `c` joins two live objects; the arrays are as long as the calls read.
-        let anchored = unsafe { nm.set_joint_anchor(c, Some(&pivot.to_array())) };
-        let frames = [frames[0].to_array(), frames[1].to_array()];
-        let limited = if j.hinge {
-            unsafe { nm.set_joint_limits(c, parent, &frames, true, &j.limits) }
-        } else {
-            unsafe { nm.set_joint_ball_limits(c, parent, &frames, &j.limits) }
-        } == Some(true);
-        if !anchored || !limited {
-            return Err(format!("{name}: SetJointAnchor {anchored}, {} {limited} (was the constraint built as a {}?)",
-                if j.hinge { "SetJointLimits" } else { "SetJointBallLimits" }, if j.hinge { "hinge" } else { "ragdoll constraint" }));
-        }
+    // SAFETY: the caller's: live objects, on the game's main thread outside the step.
+    let bound = unsafe { dms_vphysics::body::bind(&nm, body, objects)? };
+    unsafe { (api.createtable)(l, bound.len() as c_int, 0) };
+    for (k, j) in bound.iter().enumerate() {
         unsafe {
             (api.createtable)(l, 0, 5);
             api.set_number(l, c"part", j.part as f64);
             api.set_number(l, c"parent", j.parent as f64);
             api.set_str(l, c"kind", if j.hinge { "hinge" } else { "ball" });
-            api.set_vector(l, c"anchor", &pivot.to_array());
+            api.set_vector(l, c"anchor", &j.anchor.to_array());
             api.set_vector(l, c"limits", if j.hinge { &j.limits[..2] } else { &j.limits[..] });
             api.append(l, k + 1);
         }
