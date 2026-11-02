@@ -54,8 +54,10 @@ to ~20° off its bone where Homer's own shape isn't along his joints, and the fi
 
 **What it measures.** Each part's points: the model's ragdoll hulls (its `.phy`: one simple convex solid per physics
 bone, its maker's own body without holsters, coats or fingers) sampled about a centimetre apart, where the part has a
-solid that lies on its mesh (its middle within half the mesh's spread, its spread 0.6–1.2 of the mesh's: many models
-borrow another's `.phy`, a citizen's on a fast zombie, hands where another model's are); else the mesh's drawn vertices (a `.vvd` also holds the other body groups'), each the part's whose bones carry
+solid that lies on its mesh (a limb's cross-section's radius 0.6–1.2 of the mesh's and its centre within half of it;
+another part's middle within half the mesh's spread, its spread 0.6–1.2 of the mesh's: thinner, since clothes and gear
+make a mesh fat, hardly fatter, since many models borrow another's `.phy`, a citizen's on a fast zombie, hands where
+another model's are); else the mesh's drawn vertices (a `.vvd` also holds the other body groups'), each the part's whose bones carry
 most of its weight (a twist bone's share adds to its limb's), firm where they carry 75%; the spine's by the nearest of
 its four segments. Every measure is robust:
 
@@ -104,11 +106,27 @@ bounds (`tools/dms-rig/src/report.rs`):
 | thickness to Homer's | 0.345–2.2 |
 | `--sim <steps>`: after a drop on the fork, the fastest part; the farthest from the body's middle | 0.5 m/s; 1.6 m |
 
-`--plain` scores the plain fit instead; the exit code is 1 when any model has faults. On the 259 complete humanoids of
-a Garry's Mod with HL2, its episodes, CS:S and some Workshop models (the old Snap: faults on every one of them):
-NUMBERS. What remains are models Snap can't make humanoid: the Advisor (its arms are tentacles), the zombies whose head
-is their headcrab's bone (`HC_Head_Bone`: the rig maps it, make the rig by hand), Eli's peg leg, the skeleton (bones
-thinner than 0.35 of Homer's), EXCEPTIONS.
+`--plain` scores the plain fit instead; the exit code is 1 when any model has faults. Give `--sim` 900 steps: a body
+may take more than 300 to stop rocking. On the 259 complete humanoids of a Garry's Mod with HL2, its episodes, CS:S
+and some Workshop models:
+
+| | models with faults | faults | after a drop |
+|---|---|---|---|
+| the plain fit | 258 of 258 | 3659 | 6 still rocking after 300 steps |
+| the first Snap | 259 of 259 | 1097 (650 standing out, 262 swallowing, 90 asymmetric) | the Advisor flew apart (56 m/s) |
+| this Snap | 43 of 258 | 113 | all at rest after 900 steps (zombie_soldier after 1800) |
+
+What remains, and why it stays:
+
+- HL2's women's hands (18 models, 36 faults): a box over a cupped hand stands 3.0–3.2 cm out where 2.5–2.8 is the
+  bound; its size is the hand's (×0.96–1.15).
+- The zombies whose head is their headcrab's bone (`zombie/classic`, `zombie_soldier`, `HC_Head_Bone`): the rig maps the
+  head there and the spine runs to it; make their rig by hand.
+- Eli's peg leg, the skeleton (bones thinner than 0.35 of Homer's), the old `player.mdl`'s bent fingers (24–26°).
+- Sides 3.5–6.7 cm off each other's mirror where the model's own bind pose isn't symmetric (a hand turned, an arm
+  raised: Big Boss's ragdoll, EFT's PMCs, Mossman, Chell).
+- Single parts a little past a bound: G-Man's hand on his briefcase (thinner than it, ×0.45), a clavicle under a vest
+  (4.4 cm out), feet and necks 2.5–3.6 cm out on thin models (Chell, the T-800, the fast zombie, the charple).
 
 ## Simulate
 
