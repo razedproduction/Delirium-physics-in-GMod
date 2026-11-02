@@ -887,9 +887,13 @@ local function skFill()
 				local bones = sk.bones
 				if not bones or e:GetModel() ~= sk.model then return end
 				local world = e:GetWorldTransformMatrix()
+				-- Bones the engine doesn't set up for this draw (another LOD's, unused) can't be written.
+				e.dmsSkip = e.dmsSkip or {}
 				for i = 0, math.min(n, #bones) - 1 do
-					local b = bones[i + 1]
-					e:SetBoneMatrix(i, world * frame(b.pos, b.rot))
+					if not e.dmsSkip[i] then
+						local b = bones[i + 1]
+						if not pcall(e.SetBoneMatrix, e, i, world * frame(b.pos, b.rot)) then e.dmsSkip[i] = true end
+					end
 				end
 			end)
 		end
@@ -899,6 +903,7 @@ end
 local function skLoad(model)
 	if not model or model == "" then return end
 	sk = { model = model, map = {} }
+	if IsValid(ui.skEntry) then ui.skEntry:SetValue(model) end
 	skStatus()
 	request({ kind = "skeleton", model = model })
 end
@@ -917,8 +922,8 @@ local function skDraw(view, ent)
 		local col = on and color_white or Color(255, 196, 70, 180)
 		if part.shape == "capsule" then
 			local a, b, r = V(part.a), V(part.b), part.radius
-			render.DrawWireframeSphere(a, r, 8, 8, col, false)
-			render.DrawWireframeSphere(b, r, 8, 8, col, false)
+			render.DrawWireframeSphere(a, r, 6, 6, col, false)
+			render.DrawWireframeSphere(b, r, 6, 6, col, false)
 			local d = (b - a):GetNormalized()
 			local side = d:Cross(math.abs(d.z) < 0.9 and Vector(0, 0, 1) or Vector(1, 0, 0)):GetNormalized()
 			local up = d:Cross(side)
@@ -944,9 +949,10 @@ local function skeletonsTab(p)
 	local r = row(p)
 	local entry = r:Add("DTextEntry")
 	entry:Dock(LEFT)
-	entry:SetWide(330)
+	entry:SetWide(290)
 	entry:SetValue(sk.model or "")
 	entry:SetPlaceholderText("models/.../model.mdl")
+	ui.skEntry = entry
 	entry.OnEnter = function(self) skLoad(self:GetValue()) end
 	help(entry, "Model", "The model's path (as the spawn menu's 'copy to clipboard' gives it). Enter loads it.")
 	local load = button(r, "Load", "Reads the model's skeleton on the server: its rig, the joints found, the fit.", function() skLoad(entry:GetValue()) end)
@@ -1180,6 +1186,18 @@ end
 
 concommand.Add("dms_menu", toggle, nil, "Opens and closes the DMS window")
 DMS_MenuOpen = open
+
+-- dms_rig_edit [model]: the window on its Skeletons tab with the model (the one under the crosshair, else the player's).
+concommand.Add("dms_rig_edit", function(_, _, args)
+	local model = args[1]
+	if not model then
+		local ent = LocalPlayer():GetEyeTrace().Entity
+		model = IsValid(ent) and ent:GetModel() or LocalPlayer():GetModel()
+	end
+	lastTab = "Skeletons"
+	open()
+	skLoad(model)
+end, nil, "The DMS window's mapping editor on a model (default: the one under your crosshair, else yours)")
 
 -- The catalogue for the DMS tool (its behaviours and weapons): what came last, and a request for it (the hook
 -- DMS_Catalogue runs when it comes; superadmins only).

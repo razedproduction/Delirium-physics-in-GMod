@@ -119,7 +119,7 @@ local function begin(ent, kind)
 	local room, full = DMS_AgentRoom()
 	if not room then return nil, full end
 	local rag = DMS_RagdollFrom(ent)
-	if not rag then return nil, ent:GetModel() .. " has no humanoid ragdoll NM can drive (dms_skeleton)" end
+	if not rag then return nil, ent:GetModel() .. " has no humanoid ragdoll NM can drive (dms_rig)" end
 	local id, why = DMS_AttachRagdoll(rag)
 	if not id then
 		rag:Remove()
@@ -330,7 +330,7 @@ concommand.Add("dms_drunk", function(ply)
 	end
 	if not ply:Alive() or ply:InVehicle() then return say(ply, "[DMS] dms_drunk: not while dead or in a vehicle") end
 	if not possible() then return say(ply, "[DMS] dms_drunk: needs the fork's VBOX3D_NM_006 (" .. tostring(DMS.InterfaceVersion()) .. ")") end
-	if not DMS_HasMapped(ply) then return say(ply, "[DMS] dms_drunk: " .. ply:GetModel() .. " has no humanoid ragdoll NM can drive (dms_skeleton)") end
+	if not DMS_HasMapped(ply) then return say(ply, "[DMS] dms_drunk: " .. ply:GetModel() .. " has no humanoid ragdoll NM can drive (dms_rig)") end
 	local rag, why = begin(ply, "drunk")
 	if not rag then return say(ply, "[DMS] dms_drunk: " .. tostring(why)) end
 	DMS_React(rag, "button name=drunk")

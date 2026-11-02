@@ -627,18 +627,29 @@ steps as the Playroom's, the wander's COM apart (1.86 m).
 
 ### M12. Workshop models and other humanoids — 5–8 days
 
-- [ ] Skeletons beyond ValveBiped: classification (ValveBiped, known rigs by bone names, unknown); unknown humanoids
+- [x] Skeletons beyond ValveBiped: classification (ValveBiped, known rigs by bone names, unknown); unknown humanoids
       through a **mapping editor** in the DMS window: a bone per NM joint, the fitted capsules shown live over the
       model; mappings saved in `data/dms/skeletons/<model>.json`, exportable and importable as text to share.
-- [ ] Models from the Workshop: read from the mounted GMAs (nothing of them copied or redistributed); first use of a
+- [x] Models from the Workshop: read from the mounted GMAs (nothing of them copied or redistributed); first use of a
       model: the fit in the background with a message, then cached.
-- [ ] Limits stated: non-humanoids (animals, robots without a humanoid chain) aren't supported (a message); far from
+- [x] Limits stated: non-humanoids (animals, robots without a humanoid chain) aren't supported (a message); far from
       1.8 m — a warning (Delirium's tuning); models with broken bind poses — reported by the reader.
-- [ ] Multiplayer: what a joining client needs (with S3 (a): only the model, which GMod already sends or the client
+- [x] Multiplayer: what a joining client needs (with S3 (a): only the model, which GMod already sends or the client
       subscribes to).
 
 **DoD:** 10 popular Workshop player models (different rigs) work — automatically or after a mapping saved once — and a
 mapping made on one machine imports on another.
+
+**So far (ADR 0030, proposed):** a skeleton's class by its rig (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD), a
+guess by its bones' names and hierarchy, or the player's mapping (the Skeletons tab, `dms_rig_edit`), checked before
+it's fitted; physics bones that are no joint carried by their nearest posed ancestor's part; the client's finishing per
+model; a broken bind pose fitted to the mesh's bind and reported; a model's first use prepared in the background with a
+message. On the bench: HL2's models and the mounted Workshop ValveBiped ones (Terminator's arnold and t800nw, EFT's bear
+and usec) map as ValveBiped and `golden body --fit` holds (within 1e-5 of the SDK's `nm_build_fit`); `zombie/classic`
+(no Neck1) maps by names; antlion, dog, headcrab and vortigaunt are refused as not humanoid; five models stand under
+`bodyBalance`; a mapping saved, exported as text, deleted and imported comes back the same. Homer's golden: `stand`,
+`push`, `shot`, `catchfall`, `blast`, `getup`, `death` within the tolerances; `drunk` falls in 2 runs of 3 on this
+build and on `origin/main` alike (not M12's). Open: the 10 Workshop player models with other rigs (none mounted yet).
 
 ### Deferred: Playroom features not needed for Homer's behaviour
 

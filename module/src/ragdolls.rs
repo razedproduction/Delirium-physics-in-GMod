@@ -68,6 +68,13 @@ impl Skeleton {
     pub fn find(&self, name: &str) -> Option<usize> {
         self.bones.iter().position(|b| b.name.eq_ignore_ascii_case(name))
     }
+
+    /// Whether a bone has a physics object of its own: `physicsbone` is the object that moves it, its own or (for a
+    /// bone without one) its nearest ancestor's, so it's its own where its parent's differs.
+    pub fn has_object(&self, b: usize) -> bool {
+        let p = self.bones[b].physics;
+        p >= 0 && self.bones[b].parent.is_none_or(|q| self.bones[q].physics != p)
+    }
 }
 
 fn i32_at(b: &[u8], at: usize) -> Result<i32, String> {
@@ -334,7 +341,7 @@ pub fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, S
             }
         }
     };
-    let carried: Vec<(usize, usize)> = (0..s.bones.len()).filter(|&b| s.bones[b].physics >= 0 && !own.iter().any(|o| o.0 == b)).map(|b| (b, part_of(b))).collect();
+    let carried: Vec<(usize, usize)> = (0..s.bones.len()).filter(|&b| s.has_object(b) && !own.iter().any(|o| o.0 == b)).map(|b| (b, part_of(b))).collect();
     let posed: Vec<Posed> = own
         .iter()
         .map(|&o| (o, true))
@@ -348,11 +355,11 @@ pub fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, S
         .collect();
     let finish: Vec<(String, String)> = own
         .iter()
-        .filter(|o| s.bones[o.0].physics < 0)
+        .filter(|o| !s.has_object(o.0))
         .filter_map(|&(b, _)| {
             let mut at = s.bones[b].parent;
             while let Some(p) = at {
-                if s.bones[p].physics >= 0 {
+                if s.has_object(p) {
                     return Some((s.bones[b].name.clone(), s.bones[p].name.clone()));
                 }
                 at = s.bones[p].parent;
@@ -372,7 +379,7 @@ pub fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, S
         warnings.push(format!("{height:.2} m tall: Delirium's behaviours are tuned for about {TUNED_HEIGHT} m and work worse this far from it"));
     }
     warnings.extend(report);
-    let unphysical = own.iter().filter(|o| s.bones[o.0].physics < 0).count();
+    let unphysical = own.iter().filter(|o| !s.has_object(o.0)).count();
     if unphysical > 6 {
         warnings.push(format!("{unphysical} of NM's bones have no physics object here: they're drawn on the client only"));
     }

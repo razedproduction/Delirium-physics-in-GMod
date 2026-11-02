@@ -152,13 +152,13 @@ function DMS_SkeletonRequest(ply, req, reply)
 	end
 end
 
--- dms_skeleton <model>: what the model's skeleton is to DMS (its rig, the joints found, what's missing).
-concommand.Add("dms_skeleton", function(ply, _, args)
+-- dms_rig <model>: what the model's skeleton is to DMS (its rig, the joints found, what's missing).
+concommand.Add("dms_rig", function(ply, _, args)
 	if IsValid(ply) and not ply:IsSuperAdmin() then return end
 	local model = args[1] or (IsValid(ply) and ply:GetModel()) or ""
 	classes[model] = nil
 	local c, why = DMS_ModelClass(model)
-	if not c then return DMS_Say(ply, "[DMS] dms_skeleton: " .. tostring(why)) end
+	if not c then return DMS_Say(ply, "[DMS] dms_rig: " .. tostring(why)) end
 	local lines = { string.format("[DMS] %s: %s, %s%s", model, c.rig, c.complete and "NM can drive it" or "can't be fitted",
 		DMS_SkeletonSaved(model) and " (a saved mapping)" or "") }
 	for _, part in ipairs(c.parts) do
