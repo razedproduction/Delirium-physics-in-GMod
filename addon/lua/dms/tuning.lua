@@ -155,8 +155,6 @@ net.Receive("dms_tuning", function(_, ply)
 	local req = util.JSONToTable(util.Decompress(net.ReadData(n)) or "")
 	if not req then return end
 	local k = req.kind
-	-- The Skeletons tab's mapping editor (skeletons.lua).
-	if isstring(k) and k:sub(1, 8) == "skeleton" then return DMS_SkeletonRequest(ply, req, reply) end
 	if k == "catalogue" then
 		return reply(ply, "catalogue", catalogue())
 	elseif k == "params" then

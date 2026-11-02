@@ -482,7 +482,7 @@ a GitHub release, the Workshop) is the user's decision; the release notes are `d
 
 ---
 
-## After 0.1.0: GMod's ragdolls, the Workshop's included (M9–M12)
+## After 0.1.0: GMod's ragdolls, the Workshop's included (M9–M12.5)
 
 The goal: any humanoid ragdoll of the game — HL2's citizens, combine, players' models, NPCs' death ragdolls and models
 from the Workshop — gets Delirium the way Homer has it, keeping its own look. The design is proposed in
@@ -628,8 +628,10 @@ steps as the Playroom's, the wander's COM apart (1.86 m).
 ### M12. Workshop models and other humanoids — 5–8 days
 
 - [x] Skeletons beyond ValveBiped: classification (ValveBiped, known rigs by bone names, unknown); unknown humanoids
-      through a **mapping editor** in the DMS window: a bone per NM joint, the fitted capsules shown live over the
-      model; mappings saved in `data/dms/skeletons/<model>.json`, exportable and importable as text to share.
+      through a rig of their own: a bone per NM joint (and the joints, sizes, masses, placement), saved in
+      `data/dms/skeletons/<model>.json`, text to share; the addon reloads it as it changes. (The **editor** with the
+      capsules shown live over the model is its own application: M12.5. An in-game tab with sliders was tried and
+      removed, the user's choice.)
 - [x] Models from the Workshop: read from the mounted GMAs (nothing of them copied or redistributed); first use of a
       model: the fit in the background with a message, then cached.
 - [x] Limits stated: non-humanoids (animals, robots without a humanoid chain) aren't supported (a message); far from
@@ -641,16 +643,38 @@ steps as the Playroom's, the wander's COM apart (1.86 m).
 mapping made on one machine imports on another.
 
 **So far (ADR 0030, proposed):** a skeleton's class by its rig (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD), a
-guess by its bones' names and hierarchy, or the player's rig made in the editor (the Skeletons tab, `dms_rig_edit`: a
-bone per joint, joints moved, parts' sizes, masses and placement on the model, tried on the ragdolls in the world with
-their NM bodies drawn over them, `dms_rig_view`), checked before it's fitted; physics bones that are no joint carried by their nearest posed ancestor's part; the client's finishing per
-model; a broken bind pose fitted to the mesh's bind and reported; a model's first use prepared in the background with a
-message. On the bench: HL2's models and the mounted Workshop ValveBiped ones (Terminator's arnold and t800nw, EFT's bear
-and usec) map as ValveBiped and `golden body --fit` holds (within 1e-5 of the SDK's `nm_build_fit`); `zombie/classic`
-(no Neck1) maps by names; antlion, dog, headcrab and vortigaunt are refused as not humanoid; five models stand under
-`bodyBalance`; a mapping saved, exported as text, deleted and imported comes back the same. Homer's golden: `stand`,
-`push`, `shot`, `catchfall`, `blast`, `getup`, `death` within the tolerances; `drunk` falls in 2 runs of 3 on this
-build and on `origin/main` alike (not M12's). Open: the 10 Workshop player models with other rigs (none mounted yet).
+guess by its bones' names and hierarchy, or the model's rig file (`data/dms/skeletons`, format 2: bones, joints moved,
+parts' sizes, masses and placement; reloaded as the file changes, the model's ragdolls with NM refitted), checked
+before it's fitted; physics bones that are no joint carried by their nearest posed ancestor's part; the client's
+finishing per model; a broken bind pose fitted to the mesh's bind and reported; a model's first use prepared in the
+background with a message; NM's bodies drawn over the ragdolls (`dms_rig_view`). The fit is the crate `tools/dms-fit`,
+shared with M12.5's editor. On the bench: HL2's models and the mounted Workshop ValveBiped ones (Terminator's arnold
+and t800nw, EFT's bear and usec) map as ValveBiped and `golden body --fit` holds (within 1e-5 of the SDK's
+`nm_build_fit`); `zombie/classic` (no Neck1) maps by names; antlion, dog, headcrab and vortigaunt are refused as not
+humanoid; five models stand under `bodyBalance`; a rig file written beside the running game refits its ragdoll (and
+removed, gives it back its own). Homer's golden: `stand`, `push`, `shot`, `catchfall`, `blast`, `getup`, `death` within
+the tolerances; `drunk` falls in 2 runs of 3 on this build and on `origin/main` alike (not M12's). Open: the 10 Workshop
+player models with other rigs (none mounted yet; with M12.5's editor for the ones that need a rig).
+
+### M12.5. The rig editor (`tools/dms-rig`) — 5–10 days
+
+An application of its own (Rust, egui; win64, no AVX2), the user's choice: editing a rig with sliders in the game is
+awkward. It writes the rig files the addon reloads (M12), so the game can stay open beside it.
+
+- [ ] Models: GMod's own and the Workshop's read where they are (the game's VPKs, loose files, the mounted GMAs: read
+      only, nothing copied): `.mdl` (bones), `.vvd` and `.vtx` (the mesh), drawn in its own pose (the mesh's bind).
+- [ ] The rig over the model: NM's capsules and boxes from `tools/dms-fit` (the module's own fit, GTA IV's data as the
+      module reads it), refitted as anything changes.
+- [ ] Editing by the mouse: a bone picked by clicking it, joints dragged in 3D, a capsule's radius and length by its
+      handles, a part turned by rings; numbers editable beside; undo; the rig file saved (format 2), opened, shared.
+- [ ] **Simulation on the fork itself**, step 1: `vphysics.dll` (VPhysics-Box3D, `IPhysicsNM` `VBOX3D_NM_006`) loaded
+      into the application, the fitted body made natively as the module makes it (a floor, gravity), dropped, thrown
+      and dragged by the mouse without NM: the capsules, joints, limits and masses checked on the physics the game runs.
+- [ ] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
+      module's FOLLOW (`follow`, `bind`, `step`) out into a crate without Lua, Homer's golden held after it.
+
+**DoD:** a Workshop model whose rig isn't found by itself is made to stand under NM in the game with a rig made in the
+editor in minutes, without touching a slider in the game; the rig file opens on another machine the same.
 
 ### Deferred: Playroom features not needed for Homer's behaviour
 
@@ -671,7 +695,7 @@ M0 ──► M1 ─┐
 ```
 
 After 0.1.0: **M9 (spikes, ADR 0025) → M10 (ValveBiped) → M11 (death ragdolls) → M11.5 (live bodies) → M12 (Workshop,
-other humanoids)**; M11 and M12 can go in parallel after M10.
+other humanoids) → M12.5 (the rig editor, `tools/dms-rig`)**; M11 and M12 can go in parallel after M10.
 
 The critical path: **M0 → M1/M2 → M2.5 → M3 → M4**. From M2.5 on, every check in the game except the visual ones Claude
 does itself on the bench in the game (without a window).

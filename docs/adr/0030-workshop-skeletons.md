@@ -28,25 +28,26 @@ and sometimes a bind pose that disagrees with the bones' default transforms. Two
 2. **NM's Spine1–3 are never mapped**: spread between the spine and the neck in Homer's proportions (0025). The rig's
    bones between them are posed from the part whose span they're in (three bones: one each, as ValveBiped's Spine1,
    Spine2, Spine4 were).
-3. **The rig editor** (the DMS window's Skeletons tab, `dms_rig_edit [model] [part]`), because `Build::fit` on the
-   bones alone doesn't always fit a model well (the user's request): per NM part
+3. **A model's rig made by hand** is a file, `data/dms/skeletons/<model path without models/ and .mdl>.json`
+   (`{dms_skeleton = 2, model, checksum, bones = {[NM part] = bone}, joints = {[part] = {x, y, z}}, parts = {[part] =
+   {radius, half, box, mass, offset, turn}}}`; format 1, bones only, still reads), because `Build::fit` on the bones
+   alone doesn't always fit a model well. Per NM part:
    - its **bone** (NM's Spine1–3 stay spread, 2);
    - its **joint moved** from where the bone puts it (units, the model's space): the fit's input, as the spine's spread;
    - its **size** (a capsule's radius and half length, a box's half extents) and **mass** set on the fitted build (the
      inertia scaled as the shape's own moments are; the mass through the part's `heft`, so NM weighs it so);
-   - how it **lies on the model's bone** (moved in the part's frame, turned): only how the model is posed from the part
-     and drawn over it, NM's body untouched (a head or a hand that sits crooked on its capsule).
-   The model is drawn in its own pose (the mesh's bind, from the `.mdl`, the bones it's skinned to at LOD 0) with the
-   fitted capsules and joints over it, refitted on the server (`DMS.FitPreview`) as anything changes; a joint is
-   dragged with the right mouse button. **Try it in the world** puts NM again on the model's ragdolls with the rig (a
-   new one if there's none) without saving it, their NM bodies drawn over them (`dms_rig_view`, the fork's parts 15
-   times a second, `DMS.RagdollParts`/`DMS.RagdollShapes`). Rigs are kept on the server in
-   `data/dms/skeletons/<model path without models/ and .mdl>.json` (`{dms_skeleton = 2, model, checksum, bones = {[NM
-   part] = bone}, joints = {[part] = {x, y, z}}, parts = {[part] = {radius, half, box, mass, offset, turn}}}`; format 1,
-   bones only, still reads), copied as that text and pasted on another machine (a rig names bones, so it also fits
-   another model with the same names). A tried rig wins over the saved one, the saved one over the model's own.
-   Sizes and masses make this model's NM body, not Homer's, and nobody's by default: ADR 0008 holds for Homer and every
-   golden run, and a body edited far from its fit behaves as its edits make it (a knee moved 10 cm up on one side falls).
+   - how it **lies on the model's bone** (moved in the part's frame, turned): only how the model is posed from the part,
+     NM's body untouched (a head or a hand that sits crooked on its capsule).
+   The file is text that travels to another machine as it is (a rig names bones, so it also fits another model with the
+   same names). The addon watches the files (a second apart): one written or removed is read again and the model's
+   ragdolls with NM get NM again by it at once, so the game can stay open beside the editor. Sizes and masses make this
+   model's NM body, not Homer's, and nobody's by default: ADR 0008 holds for Homer and every golden run, and a body
+   edited far from its fit behaves as its edits make it (a knee moved 10 cm up on one side falls).
+   **The editor is an application of its own** (`tools/dms-rig`, Rust and egui, the next milestone; the user's choice
+   after an in-game Skeletons tab with sliders proved awkward: removed). It fits with the module's own code, now the
+   crate `tools/dms-fit` (the skeleton reader, the rigs, the fit), and simulates the body on the fork itself (first the
+   body's physics, then NM in FOLLOW). In the game stays what shows a rig: `dms_rig`, the messages, and NM's bodies drawn
+   over the ragdolls with NM (`dms_rig_view`: the fork's parts 15 times a second, `DMS.RagdollParts`/`RagdollShapes`).
 4. **Physics bones that are no joint** (hair, coats) are posed from their nearest posed ancestor's part, rigidly as in
    the bind pose; the bones the client finishes are the parts' own bones without an object of their own, each in the
    frame of its nearest ancestor with one (sent as `DMS_Finish`, at most 16).
@@ -61,7 +62,7 @@ and sometimes a bind pose that disagrees with the bones' default transforms. Two
 7. **Limits stated**: non-humanoids get the message of 1; a body far from 1.8 m a warning (0025); a broken bind pose
    the reader's line.
 8. **Multiplayer**: with native bodies (0026) a joining client needs only the model, which it already has or
-   subscribes to; the bones to finish come with the ragdoll (NW2). Mappings live on the server only.
+   subscribes to; the bones to finish come with the ragdoll (NW2). Rigs live on the server only.
 
 ## Consequences
 
@@ -69,5 +70,5 @@ and sometimes a bind pose that disagrees with the bones' default transforms. Two
   ragdolls of any mapped humanoid get NM, death and live bodies included.
 - ValveBiped's fit is unchanged: `golden body --fit` on male_07, female_01, combine_soldier and two Workshop
   ValveBiped models within the SDK's `nm_build_fit` (1e-5); the 6 finished bones as before.
-- A rig's hulls are the fitted sizes: a mapping saved again makes the model's body again.
+- A rig's hulls are the fitted sizes: a rig changed makes the model's body again.
 - Japanese MMD names only match when the `.mdl` stores them as UTF-8.

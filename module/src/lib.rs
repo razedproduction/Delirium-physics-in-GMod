@@ -15,7 +15,6 @@ mod nm;
 mod nm_natives;
 mod ragdolls;
 mod react;
-mod rigs;
 mod selftest;
 mod step;
 mod tuning;

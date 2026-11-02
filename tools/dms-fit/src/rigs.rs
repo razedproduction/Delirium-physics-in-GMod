@@ -6,7 +6,8 @@
 
 use delirium::prelude::*;
 
-use crate::ragdolls::{M, Skeleton};
+use crate::M;
+use crate::skeleton::Skeleton;
 
 /// NM's parts in part order (`delirium_data::nm_asset::PARTS`): the mapping's keys.
 pub const PARTS: [&str; 21] = delirium_data::nm_asset::PARTS;

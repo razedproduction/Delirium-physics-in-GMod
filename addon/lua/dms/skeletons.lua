@@ -1,10 +1,9 @@
 -- Skeletons beyond ValveBiped (ROADMAP M12, docs/adr/0030): which bone of a model is each of NM's joints, and the
 -- player's edits of the fit. The module knows the common rigs by their bones' names (ValveBiped, Biped, Mixamo, Unreal,
--- TF2, VRoid, MMD) and guesses the rest by the names' words and the hierarchy (DMS.ModelClassify). In the DMS window's
--- Skeletons tab a model's rig is made by hand: a bone per joint, the joints moved, the parts' sizes, masses and how
--- they lie on the model; kept in data/dms/skeletons/<model>.json (exported and imported as text, so a rig made on one
--- machine works on another), tried on the ragdolls in the world before it's saved. Models are read where the game has
--- them (mounted Workshop GMAs included): nothing of them is copied or written anywhere.
+-- TF2, VRoid, MMD) and guesses the rest by the names' words and the hierarchy (DMS.ModelClassify). A model's rig made
+-- by hand (the rig editor, tools/dms-rig; or written by hand) is data/dms/skeletons/<model>.json, text that travels to
+-- another machine as it is; it's read again as the file changes, and the model's ragdolls with NM get NM again by it.
+-- Models are read where the game has them (mounted Workshop GMAs included): nothing of them is copied or written.
 --
 -- A rig: {bones = {[part] = bone}, joints = {[part] = {x, y, z}} (units, the model's space), parts = {[part] = {radius,
 -- half, box = {x, y, z} (m), mass (kg), offset = {x, y, z} (m, the part's frame), turn = {p, y, r} (degrees)}}}.
@@ -19,9 +18,10 @@ local function path(model)
 	local name = model:lower():gsub("\\", "/"):gsub("^models/", ""):gsub("%.mdl$", ""):gsub("[^%w_%-/%.]", "_")
 	return DIR .. "/" .. name .. ".json"
 end
+DMS_SkeletonPath = path
 
-local saved = {} -- model -> its saved rig, or false
-local drafts = {} -- model -> a rig being tried (the editor's "Try it"), till it's saved or dropped
+local saved = {} -- model -> its rig, or false
+local stamps = {} -- model -> its file's time when read (0: none)
 local classes = {} -- model -> its class (DMS.ModelClassify), or {error}
 
 -- A model's .mdl as the game has it (its own files, a mounted GMA's): bytes, or nil and why.
@@ -41,10 +41,8 @@ end
 
 local function zero(v) return not v or (v[1] == 0 and v[2] == 0 and v[3] == 0) end
 
--- A rig as it may come (a file, the client, pasted text) made safe: names as strings, numbers as numbers, nothing
--- that doesn't change the fit.
-function DMS_RigClean(t)
-	t = istable(t) and t or {}
+-- A rig as a file has it made safe: names as strings, numbers as numbers, nothing that doesn't change the fit.
+local function clean(t)
 	local rig = { bones = {}, joints = {}, parts = {} }
 	for part, bone in pairs(istable(t.bones) and t.bones or {}) do
 		if isstring(part) and isstring(bone) and bone ~= "" then rig.bones[part] = bone end
@@ -67,42 +65,33 @@ function DMS_RigClean(t)
 	return rig
 end
 
--- Whether a rig changes anything beyond its bones.
-local function edited(rig) return rig and (next(rig.joints) ~= nil or next(rig.parts) ~= nil) end
-
--- A rig as text (the export and the file): JSON with the model it was made for.
-local function encode(model, rig, checksum)
-	return util.TableToJSON({ dms_skeleton = FORMAT, model = model, checksum = checksum, bones = rig.bones,
-		joints = next(rig.joints) and rig.joints or nil, parts = next(rig.parts) and rig.parts or nil }, true)
-end
-
--- A rig from text (an import or the file; format 1 had bones only): the rig and the model it was made for, or nil
--- and why.
+-- A rig from its file's text (format 1 had bones only): the rig and the model it was made for, or nil and why.
 function DMS_SkeletonDecode(text)
 	local t = isstring(text) and util.JSONToTable(text)
-	if not istable(t) or not istable(t.bones) then return nil, "not a DMS skeleton mapping (no bones)" end
-	if (tonumber(t.dms_skeleton) or 0) > FORMAT then return nil, "a mapping from a newer DMS (format " .. tostring(t.dms_skeleton) .. ")" end
-	return DMS_RigClean(t), t.model
+	if not istable(t) or not istable(t.bones) then return nil, "not a DMS rig (no bones)" end
+	if (tonumber(t.dms_skeleton) or 0) > FORMAT then return nil, "a rig from a newer DMS (format " .. tostring(t.dms_skeleton) .. ")" end
+	return clean(t), t.model
 end
 
--- The player's saved rig of a model, or nil.
-function DMS_SkeletonSaved(model)
+-- The rig of a model from data/dms/skeletons, or nil (the model's own).
+function DMS_ModelRig(model)
 	if saved[model] == nil then
-		local text = file.Read(path(model), "DATA")
-		saved[model] = text and DMS_SkeletonDecode(text) or false
+		local p = path(model)
+		stamps[model] = file.Time(p, "DATA") or 0
+		local text = file.Read(p, "DATA")
+		local rig, why = nil, nil
+		if text then rig, why = DMS_SkeletonDecode(text) end
+		if text and not rig then print("[DMS] data/" .. p .. ": " .. tostring(why)) end
+		saved[model] = rig or false
 	end
 	return saved[model] or nil
-end
-
--- The rig NM uses for a model: the one being tried, else the saved one, else none (the model's own).
-function DMS_ModelRig(model)
-	return drafts[model] or DMS_SkeletonSaved(model)
 end
 
 -- The module's fit arguments of a rig: its bones (nil for the model's own) and its edits (nil for none).
 function DMS_RigArgs(rig)
 	if not rig then return nil, nil end
-	return next(rig.bones) and rig.bones or nil, edited(rig) and rig or nil
+	local edited = next(rig.joints) ~= nil or next(rig.parts) ~= nil
+	return next(rig.bones) and rig.bones or nil, edited and rig or nil
 end
 
 local function forget(model)
@@ -111,7 +100,8 @@ local function forget(model)
 	if DMS_ModelChanged then DMS_ModelChanged(model) end
 end
 
--- What a model's skeleton is (DMS.ModelClassify with its rig's bones): the class, or nil and why. Kept a session.
+-- What a model's skeleton is (DMS.ModelClassify with its rig's bones): the class, or nil and why. Kept till its rig
+-- changes.
 function DMS_ModelClass(model)
 	local c = classes[model]
 	if not c then
@@ -128,37 +118,15 @@ function DMS_ModelClass(model)
 	return c
 end
 
--- Whether NM can drive the model: a humanoid whose joints are all known (by its rig or a saved one).
+-- Whether NM can drive the model: a humanoid whose joints are all known (by its rig, or its file's).
 function DMS_ModelMapped(model)
 	if not isstring(model) or model == "" or model == DMS_HOMER_MODEL then return false end
 	local c = DMS_ModelClass(model)
 	return c ~= nil and c.complete
 end
 
--- Saves a rig for a model (checked by fitting it first): true, or nil and why. The draft goes.
-function DMS_SkeletonSave(model, rig)
-	local bytes, why = DMS_ModelBytes(model)
-	if not bytes then return nil, why end
-	rig = DMS_RigClean(rig)
-	local bones, edits = DMS_RigArgs(rig)
-	local ok, f = pcall(DMS.FitPreview, model, bytes, bones, edits)
-	if not ok then return nil, tostring(f) end
-	local s = DMS.ModelSkeleton(bytes)
-	file.CreateDir(string.GetPathFromFilename(path(model)))
-	file.Write(path(model), encode(model, rig, s.checksum))
-	drafts[model] = nil
-	forget(model)
-	return true
-end
-
-function DMS_SkeletonDelete(model)
-	file.Delete(path(model))
-	drafts[model] = nil
-	forget(model)
-end
-
--- NM again on a model's ragdolls with NM, with the rig it has now (a draft tried, a rig saved): each given its own
--- physics and NM anew, balancing. How many.
+-- NM again on a model's ragdolls with NM, by the rig it has now: each given its own physics and NM anew, balancing
+-- (death and live bodies keep theirs). How many.
 local function refit(model)
 	local n = 0
 	for _, ent in pairs(table.Copy(DMS_Agents)) do
@@ -173,102 +141,32 @@ local function refit(model)
 	return n
 end
 
--- Tries a rig on the model's ragdolls in the world (a new one in front of the player if there's none): NM's body made
--- by it, not saved. true and what was done, or nil and why.
-function DMS_SkeletonTry(ply, model, rig)
-	local bytes, why = DMS_ModelBytes(model)
-	if not bytes then return nil, why end
-	rig = DMS_RigClean(rig)
-	local bones, edits = DMS_RigArgs(rig)
-	local ok, err = pcall(DMS.FitPreview, model, bytes, bones, edits)
-	if not ok then return nil, tostring(err) end
-	drafts[model] = rig
-	forget(model)
-	DMS_WhenReady(model, ply, function(_, failed)
-		if failed then return end
-		if refit(model) > 0 or not IsValid(ply) then return end
-		local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 150, filter = ply })
-		local ent = DMS_SpawnRagdoll(model, DMS_FloorAt(tr.HitPos, ply), ply:EyeAngles().y + 180)
-		if not ent then return end
-		undo.Create("DMS ragdoll")
-		undo.AddEntity(ent)
-		undo.SetPlayer(ply)
-		undo.Finish()
-		ply:AddCleanup("ragdolls", ent)
-		DMS_Send(ent, "bodyBalance start=true")
-	end)
-	return true
-end
-
--- Drops a model's draft (back to its saved rig or its own) and puts NM on its ragdolls again by it.
-local function dropDraft(model)
-	if not drafts[model] then return end
-	drafts[model] = nil
-	forget(model)
-	DMS_WhenReady(model, nil, function(_, failed) if not failed then refit(model) end end)
-end
-
--- The mapping editor's requests (the DMS window, tuning.lua's channel; superadmins): `skeleton` the model's bones,
--- class, rig and fit; `skeleton_fit` a rig tried in the window; `skeleton_try` on the ragdolls in the world;
--- `skeleton_save`, `skeleton_delete`, `skeleton_drop` (the draft); `skeleton_import` a rig's text.
-local function preview(model, bytes, rig)
-	local ok, f = pcall(DMS.FitPreview, model, bytes, DMS_RigArgs(rig))
-	if ok then return f end
-	return { error = tostring(f) }
-end
-
-function DMS_SkeletonRequest(ply, req, reply)
-	local model = tostring(req.model or "")
-	local bytes, why = DMS_ModelBytes(model)
-	if not bytes then return reply(ply, "skeleton", { model = model, error = why }) end
-	if not DMS.DataInfo() and not pcall(DMS.LoadData, DMS_GameDir()) then
-		return reply(ply, "skeleton", { model = model, error = "NM's data isn't loaded" })
+-- The rigs' files watched (a second apart): one written or removed (by the rig editor, by hand) is read again, and the
+-- model's ragdolls with NM get it at once; the superadmins are told.
+timer.Create("DMS_Skeletons", 1, 0, function()
+	local models = {}
+	for model in pairs(stamps) do models[model] = true end
+	for _, ent in pairs(DMS_Agents or {}) do
+		if IsValid(ent) and ent.DMS_Native then models[ent:GetModel()] = true end
 	end
-	local k = req.kind
-	local s = DMS.ModelSkeleton(bytes)
-	if k == "skeleton_fit" or k == "skeleton_try" then
-		local rig = DMS_RigClean(req.rig)
-		local note
-		if k == "skeleton_try" then
-			local ok, err = DMS_SkeletonTry(ply, model, rig)
-			note = ok and "trying it on the ragdolls in the world (not saved)" or ("can't try it: " .. tostring(err))
+	for model in pairs(models) do
+		local now = file.Time(path(model), "DATA") or 0
+		if stamps[model] == nil then
+			stamps[model] = now
+		elseif now ~= stamps[model] then
+			forget(model)
+			local rig = DMS_ModelRig(model)
+			local c, why = DMS_ModelClass(model)
+			local text = string.format("[DMS] %s: rig %s (%s)", model, rig and "reloaded from data/" .. path(model) or "file removed: the model's own",
+				c and (c.complete and c.rig or c.why) or tostring(why))
+			print(text)
+			for _, ply in ipairs(player.GetAll()) do if ply:IsSuperAdmin() then ply:ChatPrint(text) end end
+			if c and c.complete then
+				DMS_WhenReady(model, nil, function(_, failed) if not failed then refit(model) end end)
+			end
 		end
-		return reply(ply, "skeleton_fit", { model = model, preview = preview(model, bytes, rig), text = encode(model, rig, s.checksum),
-			note = note, draft = drafts[model] ~= nil })
 	end
-	local note
-	if k == "skeleton_delete" then
-		DMS_SkeletonDelete(model)
-		note = "the saved rig deleted: the model's own (if any) is used"
-		dropDraft(model)
-	elseif k == "skeleton_save" then
-		local ok, err = DMS_SkeletonSave(model, req.rig)
-		note = ok and ("saved in data/" .. path(model)) or ("not saved: " .. tostring(err))
-		if ok then DMS_WhenReady(model, nil, function(_, failed) if not failed then refit(model) end end) end
-	elseif k == "skeleton_drop" then
-		dropDraft(model)
-		note = "the rig tried is dropped"
-	end
-	local okc, class = pcall(DMS.ModelClassify, bytes)
-	local rig = not req.own and DMS_ModelRig(model) or nil
-	local imported
-	if k == "skeleton_import" then
-		local r, from = DMS_SkeletonDecode(req.text)
-		if not r then return reply(ply, "skeleton", { model = model, error = "import: " .. tostring(from) }) end
-		imported, rig = from or "?", r
-	end
-	local bones = {}
-	for i, b in ipairs(s.bones) do
-		bones[i] = { name = b.name, parent = b.parent, pos = b.mesh_pos, rot = b.mesh_rot, physics = b.physics }
-	end
-	rig = rig and table.Copy(rig) or { bones = {}, joints = {}, parts = {} }
-	if not next(rig.bones) and okc then rig.bones = table.Copy(class.map) end
-	return reply(ply, "skeleton", {
-		model = model, bones = bones, class = okc and class or { error = tostring(class) }, saved = DMS_SkeletonSaved(model) ~= nil,
-		draft = drafts[model] ~= nil, rig = rig, imported = imported, note = note, preview = preview(model, bytes, rig),
-		text = encode(model, rig, s.checksum),
-	})
-end
+end)
 
 -- dms_rig <model>: what the model's skeleton is to DMS (its rig, the joints found, what's missing).
 concommand.Add("dms_rig", function(ply, _, args)
@@ -279,7 +177,7 @@ concommand.Add("dms_rig", function(ply, _, args)
 	if not c then return DMS_Say(ply, "[DMS] dms_rig: " .. tostring(why)) end
 	local rig = DMS_ModelRig(model)
 	local lines = { string.format("[DMS] %s: %s, %s%s", model, c.rig, c.complete and "NM can drive it" or "can't be fitted",
-		drafts[model] and " (a rig being tried)" or rig and (" (a saved rig" .. (edited(rig) and ", edited" or "") .. ")") or "") }
+		rig and (" (its rig: data/" .. path(model) .. ")") or "") }
 	for _, part in ipairs(c.parts) do
 		lines[#lines + 1] = string.format("  %-16s %s", part, c.map[part] or (c.optional[part] and "-" or "MISSING"))
 	end

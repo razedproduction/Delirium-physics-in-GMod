@@ -19,13 +19,15 @@ use crate::data;
 use crate::ffi::vphysics_nm::{self, IPhysicsConstraint, IPhysicsObject, PhysicsNMBodyState, Version};
 use crate::follow::BodyDef;
 use crate::lua::{self, Api, LuaState, TTABLE, native};
-use crate::rigs;
+use dms_fit::fit::{FINISH_MAX, Fit, Posed, bind_report, height};
+use dms_fit::rigs;
+use dms_fit::skeleton::{Skeleton, i32_at, read_mdl};
+pub use dms_fit::M;
 
 pub const NATIVES: &[(&CStr, lua::CFunction)] = &[
     (c"ModelSkeleton", model_skeleton),
     (c"RagdollFit", ragdoll_fit),
     (c"ModelClassify", model_classify),
-    (c"FitPreview", fit_preview),
     (c"RagdollForget", ragdoll_forget),
     (c"RagdollShapes", ragdoll_shapes),
     (c"RagdollParts", ragdoll_parts),
@@ -40,209 +42,28 @@ pub const NATIVES: &[(&CStr, lua::CFunction)] = &[
     (c"PoseModel", pose_model),
 ];
 
-/// Metres per Source unit.
-pub const M: f32 = 0.0254;
-/// `mstudiobone_t`'s size (studio versions 44 to 49).
-const BONE_SIZE: usize = 216;
-/// Delirium's behaviours are tuned for about this height (m): a fitted body far from it gets a warning.
-const TUNED_HEIGHT: f32 = 1.8;
-const HEIGHT_WARN: f32 = 0.25;
-
-pub struct Bone {
-    pub name: String,
-    pub parent: Option<usize>,
-    /// Its frame in the model's space (units): the chain of its default transforms (`pos`, `quat` in its parent's),
-    /// and the inverse of the `.mdl`'s `poseToBone`.
-    pub bind: (Vec3, Quat),
-    pub pose: (Vec3, Quat),
-    /// Its physics object's index (`physicsbone`).
-    pub physics: i32,
-}
-
-pub struct Skeleton {
-    pub name: String,
-    pub version: i32,
-    pub checksum: i32,
-    pub bones: Vec<Bone>,
-}
-
-impl Skeleton {
-    pub fn find(&self, name: &str) -> Option<usize> {
-        self.bones.iter().position(|b| b.name.eq_ignore_ascii_case(name))
-    }
-
-    /// Whether a bone has a physics object of its own: `physicsbone` is the object that moves it, its own or (for a
-    /// bone without one) its nearest ancestor's, so it's its own where its parent's differs.
-    pub fn has_object(&self, b: usize) -> bool {
-        let p = self.bones[b].physics;
-        p >= 0 && self.bones[b].parent.is_none_or(|q| self.bones[q].physics != p)
-    }
-}
-
-fn i32_at(b: &[u8], at: usize) -> Result<i32, String> {
-    b.get(at..at + 4).map(|s| i32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok_or_else(|| format!("truncated at {at}"))
-}
-
-fn f32_at(b: &[u8], at: usize) -> Result<f32, String> {
-    i32_at(b, at).map(|i| f32::from_bits(i as u32))
-}
-
-fn str_at(b: &[u8], at: usize) -> Result<String, String> {
-    let s = b.get(at..).ok_or_else(|| format!("a name past the end ({at})"))?;
-    let end = s.iter().position(|&c| c == 0).unwrap_or(s.len()).min(256);
-    Ok(String::from_utf8_lossy(&s[..end]).into_owned())
-}
-
-/// The bones of a `.mdl` (`studiohdr_t`, versions 44 to 49: GMod's), their hierarchy and bind pose.
-pub fn read_mdl(b: &[u8]) -> Result<Skeleton, String> {
-    if b.len() < 408 || &b[..4] != b"IDST" {
-        return Err("not a .mdl (no IDST)".into());
-    }
-    let version = i32_at(b, 4)?;
-    if !(44..=49).contains(&version) {
-        return Err(format!("studio version {version} (44 to 49 read)"));
-    }
-    let (count, index) = (i32_at(b, 156)?, i32_at(b, 160)?);
-    if !(1..=256).contains(&count) || index < 0 || index as usize + count as usize * BONE_SIZE > b.len() {
-        return Err(format!("{count} bones at {index}: not in the file"));
-    }
-    let mut bones: Vec<Bone> = Vec::with_capacity(count as usize);
-    for i in 0..count as usize {
-        let o = index as usize + i * BONE_SIZE;
-        let v = |at: usize| -> Result<Vec3, String> { Ok(Vec3::new(f32_at(b, o + at)?, f32_at(b, o + at + 4)?, f32_at(b, o + at + 8)?)) };
-        let name = str_at(b, (o as i64 + i64::from(i32_at(b, o)?)) as usize)?;
-        let parent = i32_at(b, o + 4)?;
-        let parent = (parent >= 0).then_some(parent as usize).filter(|&p| p < i);
-        let pos = v(32)?;
-        let rot = Quat::from_xyzw(f32_at(b, o + 44)?, f32_at(b, o + 48)?, f32_at(b, o + 52)?, f32_at(b, o + 56)?).normalize();
-        // poseToBone: rows of [R | t], the model's space into the bone's.
-        let row = |r: usize| v(96 + r * 16);
-        let (r0, r1, r2) = (row(0)?, row(1)?, row(2)?);
-        let t = Vec3::new(f32_at(b, o + 96 + 12)?, f32_at(b, o + 96 + 28)?, f32_at(b, o + 96 + 44)?);
-        let inv = Mat3::from_cols(r0, r1, r2);
-        let pose = (-(inv * t), Quat::from_mat3(&inv).normalize());
-        let bind = match parent {
-            Some(p) => {
-                let (pp, pq) = bones[p].bind;
-                (pp + pq * pos, (pq * rot).normalize())
-            }
-            None => (pos, rot),
-        };
-        bones.push(Bone { name, parent, bind, pose, physics: i32_at(b, o + 172)? });
-    }
-    Ok(Skeleton { name: str_at(b, 12)?, version, checksum: i32_at(b, 8)?, bones })
-}
 
 /// The parts a ragdoll may have no physics object for (ValveBiped has none for these), each between two that it has
 /// (or that come before it here) and how far along: where their pose comes from when NM takes over the ragdoll's.
 const BETWEEN: [(usize, usize, usize, f32); 6] = [(7, 0, 9, 1.0 / 3.0), (8, 0, 9, 2.0 / 3.0), (10, 9, 12, 1.0 / 3.0), (11, 9, 12, 2.0 / 3.0), (13, 10, 14, 0.5), (17, 10, 18, 0.5)];
 
-/// NM's 21 joints on a mapped skeleton (m, the model's space; `at` its bones' frames in units), as
-/// `NmCharacter.Joints` takes them from a Unity humanoid: the pelvis, then each part's joint with its parent; the 4
-/// spine joints spread from the spine to the neck by `spread`; a missing neck or clavicle put between its neighbours.
-/// Also what was made up.
-pub fn mapped_joints(m: &rigs::Map, at: &[(Vec3, Quat)], spread: [f32; 3]) -> Result<([Vec3; 21], Vec<String>), String> {
-    let at = |k: usize| m[k].map(|b| at[b].0 * M);
-    let need = |k: usize| at(k).ok_or_else(|| format!("no bone for {}", rigs::PARTS[k]));
-    let mut made = vec![];
-    let (spine, head) = (need(7)?, need(12)?);
-    let neck = at(11).unwrap_or_else(|| {
-        made.push("Neck".to_string());
-        spine.lerp(head, 0.85)
-    });
-    let (l_arm, r_arm) = (need(14)?, need(18)?);
-    let mut clavicle = |k: usize, arm: Vec3, side: &str| {
-        at(k).unwrap_or_else(|| {
-            made.push(format!("Clavicle {side}"));
-            neck.lerp(arm, 0.3)
-        })
-    };
-    let (l_clav, r_clav) = (clavicle(13, l_arm, "L"), clavicle(17, r_arm, "R"));
-    let j = [
-        need(0)?, need(1)?, need(2)?, need(3)?, need(4)?, need(5)?, need(6)?,
-        spine, spine.lerp(neck, spread[0]), spine.lerp(neck, spread[1]), spine.lerp(neck, spread[2]), neck, head,
-        l_clav, l_arm, need(15)?, need(16)?,
-        r_clav, r_arm, need(19)?, need(20)?,
-    ];
-    Ok((j, made))
-}
-
-/// Where Homer's Spine1, Spine2 and Spine3 joints are along his spine, from Spine0's joint (0) to the neck's (1),
-/// as fractions of the way along his joints.
-pub fn homer_spread(body: &dms_game::body::Body) -> [f32; 3] {
-    let pivot = |k: usize| body.joints.iter().find(|j| j.part == k).map_or(body.parts[k].pos, |j| body.parts[k].pos + body.parts[k].rot * j.anchor_child);
-    let p: Vec<Vec3> = (7..=11).map(pivot).collect();
-    let legs: Vec<f32> = p.windows(2).map(|w| w[0].distance(w[1])).collect();
-    let all: f32 = legs.iter().sum::<f32>().max(1e-4);
-    [legs[0] / all, (legs[0] + legs[1]) / all, (legs[0] + legs[1] + legs[2]) / all]
-}
-
-/// A body fitted to a model.
+/// A body fitted to a model (`dms_fit::fit`), as the agents drive it (`BodyDef`).
 pub struct Fitted {
     pub def: Arc<BodyDef>,
-    /// The `.mdl`'s checksum it was fitted from.
-    pub checksum: i32,
-    /// The fitted build's frames, standing as the model's bind pose (m, the model's space).
-    pub frames: Vec<Transform>,
-    /// The 21 joints it was fitted to (`Build::fit`'s input, in Homer's stance; m, the model's space).
-    pub joints: Vec<Vec3>,
-    /// The model's bones posed from parts (S4).
-    pub posed: Vec<Posed>,
-    /// The bones NM has a part for but the model has no physics object for, each with its nearest ancestor that has
-    /// one: put right on the client (cl_ragdolls.lua).
-    pub finish: Vec<(String, String)>,
-    /// What the player should know: joints made up, a height far from NM's tuning, bones posed only on the client.
-    pub warnings: Vec<String>,
-    pub height: f32,
-    pub mass: f32,
-    /// The skeleton's class (`rigs::Class::rig`) and the mapping it was fitted by (`None` for found by itself).
-    pub rig: String,
-    pub map: [Option<String>; 21],
-    pub names: Option<Vec<(String, String)>>,
-    pub edits: Option<rigs::Edits>,
-    /// The joints over the model in its own pose (m, the model's space; moved as edited).
-    pub shown_joints: Vec<Vec3>,
-    /// Each part's frame in the model's own pose (its reference, m), for showing the capsules over it.
-    pub shown: Vec<Transform>,
+    pub fit: Fit,
 }
 
-/// A model's bone posed from an NM part (S4): its frame in the part's (m), and whether it's the part's own bone (a
-/// mapped joint, or a spine bone in the part's span) or a physics bone carried by its nearest posed ancestor's part.
-pub struct Posed {
-    pub bone: String,
-    pub part: usize,
-    pub at: Vec3,
-    pub turn: Quat,
-    pub own: bool,
+impl std::ops::Deref for Fitted {
+    type Target = Fit;
+    fn deref(&self) -> &Fit {
+        &self.fit
+    }
 }
 
-/// How far `poseToBone` (the mesh's bind) may be from the chain of the bones' default transforms before the reader
-/// calls the bind pose broken (units, degrees).
-const POSE_GAP: f32 = 0.5;
-const POSE_TURN: f32 = 2.0;
-
-/// The reader's report on a model's bind pose: whether the mapped bones' default transforms disagree with the mesh's
-/// bind (`poseToBone`; proportion tricks, broken exports), and what to say.
-pub fn bind_report(s: &Skeleton, m: &rigs::Map) -> (bool, Vec<String>) {
-    let mut out = vec![];
-    let worst = m.iter().flatten().map(|&b| (b, s.bones[b].bind.0.distance(s.bones[b].pose.0), s.bones[b].bind.1.angle_between(s.bones[b].pose.1).to_degrees())).fold(
-        None::<(usize, f32, f32)>,
-        |w, x| match w {
-            Some(w) if w.1 + w.2 * 0.1 >= x.1 + x.2 * 0.1 => Some(w),
-            _ => Some(x),
-        },
-    );
-    let broken = worst.is_some_and(|(_, gap, turn)| gap > POSE_GAP || turn > POSE_TURN);
-    if let (true, Some((b, gap, turn))) = (broken, worst) {
-        out.push(format!(
-            "broken bind pose: the bones' default transforms are up to {gap:.1} units and {turn:.0}° off the mesh's bind ({}); fitted to the mesh's",
-            s.bones[b].name
-        ));
-    }
-    if s.bones.iter().any(|b| !(b.bind.0.is_finite() && b.bind.1.is_finite() && b.pose.0.is_finite() && b.pose.1.is_finite())) {
-        out.push("the .mdl's bind pose isn't finite".into());
-    }
-    (broken, out)
+/// Homer's build fitted to a model (`dms_fit::fit` on the loaded data's Homer).
+fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, String)]>, edits: Option<&rigs::Edits>) -> Result<Fitted, String> {
+    let fit = dms_fit::fit::fit(&d.homer, &d.body, s, model, names, edits)?;
+    Ok(Fitted { def: Arc::new(BodyDef { build: fit.build.clone(), body: fit.body.clone(), fitted: true }), fit })
 }
 
 static FITS: Mutex<Option<HashMap<String, Arc<Fitted>>>> = Mutex::new(None);
@@ -256,195 +77,6 @@ pub fn unload() {
     *FITS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // The map's environment took the native bodies with it.
     *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) = None;
-}
-
-/// Each part's segment: from its joint to this child's (the leaves, feet, hands and head, turn with their parent).
-const SEGMENT: [(usize, usize); 15] = [(1, 2), (2, 3), (4, 5), (5, 6), (7, 8), (8, 9), (9, 10), (10, 11), (11, 12), (13, 14), (14, 15), (15, 16), (17, 18), (18, 19), (19, 20)];
-
-/// Homer's 21 joints as he stands (his build's frames): each part's pivot on its parent, the root's centre.
-fn homer_joints(body: &dms_game::body::Body) -> Vec<Vec3> {
-    (0..body.parts.len())
-        .map(|k| body.joints.iter().find(|j| j.part == k).map_or(body.parts[k].pos, |j| body.parts[k].pos + body.parts[k].rot * j.anchor_child))
-        .collect()
-}
-
-/// The model's joints (`bind`, its reference pose) put in Homer's stance (ROADMAP M10): each segment keeps the model's
-/// length and takes the way Homer's goes, turned to the model's facing (its hips' line). NM's standing frames are what
-/// it holds as the body's neutral, so a body fitted to ValveBiped's reference pose stood with its arms out and its head
-/// forward. Also each part's turn from the reference pose to the stance, for the model's bones.
-fn repose(body: &dms_game::body::Body, bind: &[Vec3; 21]) -> ([Vec3; 21], [Quat; 21]) {
-    let h = homer_joints(body);
-    let flat = |v: Vec3| v.with_z(0.0).normalize_or(Vec3::X);
-    // Homer's hips' line onto the model's: a turn about Z.
-    let face = Quat::from_rotation_arc(flat(h[4] - h[1]), flat(bind[4] - bind[1]));
-    let mut at = *bind;
-    for k in 1..21 {
-        let p = body.parts[k].parent.unwrap_or(0);
-        let way = (face * (h[k] - h[p])).normalize_or_zero();
-        let len = bind[k].distance(bind[p]);
-        at[k] = if way == Vec3::ZERO { at[p] + (bind[k] - bind[p]) } else { at[p] + way * len };
-    }
-    let mut turn = [Quat::IDENTITY; 21];
-    for k in 1..21 {
-        let p = body.parts[k].parent.unwrap_or(0);
-        turn[k] = match SEGMENT.iter().find(|s| s.0 == k) {
-            Some(&(_, c)) => {
-                let (a, b) = ((bind[c] - bind[k]).normalize_or_zero(), (at[c] - at[k]).normalize_or_zero());
-                if a == Vec3::ZERO || b == Vec3::ZERO { turn[p] } else { Quat::from_rotation_arc(a, b) }
-            }
-            None => turn[p],
-        };
-    }
-    (at, turn)
-}
-
-/// Homer's build fitted to a humanoid skeleton (`Build::fit` on Homer's standing frames): its joints found by its rig
-/// or a player's mapping (`names`, `{part, bone}`; ROADMAP M12), NM's spine joints spread as Homer's are along his
-/// spine (ADR 0025), the skeleton put in Homer's stance first ([`repose`], ADR 0027). `model` names it in errors.
-///
-/// The player's `edits` (docs/adr/0030): joints moved before the fit (its input), then the parts' sizes and masses set
-/// on the fitted build, and the parts moved and turned on the model's bones (how the model is posed from them).
-pub fn fit(d: &data::Data, s: &Skeleton, model: &str, names: Option<&[(String, String)]>, edits: Option<&rigs::Edits>) -> Result<Fitted, String> {
-    let bind_at: Vec<Vec3> = s.bones.iter().map(|b| b.bind.0).collect();
-    let class = rigs::classify(s, names, &bind_at)?;
-    if !class.complete() {
-        return Err(class.why(model));
-    }
-    let (broken, report) = bind_report(s, &class.map);
-    // The mesh's bind where the bones' defaults disagree with it: the capsules go where the model is drawn.
-    let at: Vec<(Vec3, Quat)> = s.bones.iter().map(|b| if broken { b.pose } else { b.bind }).collect();
-    if at.iter().any(|(p, q)| !(p.is_finite() && q.is_finite())) {
-        return Err(format!("{model}: the .mdl's bind pose isn't finite"));
-    }
-    let spread = homer_spread(&d.body);
-    let (mut bind, made) = mapped_joints(&class.map, &at, spread)?;
-    if let Some(e) = edits {
-        for (j, o) in bind.iter_mut().zip(&e.joints) {
-            *j += *o * M;
-        }
-    }
-    let (joints, turn) = repose(&d.body, &bind);
-    let frames: Vec<Transform> = d.body.parts.iter().map(|p| Transform::from_translation(p.pos).with_rotation(p.rot)).collect();
-    let (mut build, frames) = d.homer.fit(&frames, &joints);
-    let mut body = dms_game::body::Body::new(&build, &frames);
-    if let Some(e) = edits.filter(|e| e.sizes() || e.masses()) {
-        rigs::apply_sizes(&mut build, e);
-        let now: Vec<f32> = dms_game::body::Body::new(&build, &frames).parts.iter().map(|p| p.mass).collect();
-        rigs::apply_masses(&mut build, e, &now);
-        body = dms_game::body::Body::new(&build, &frames);
-    }
-    // How each part lies on the model's bones (its bones' frames in it, and where it shows over the model).
-    let adjust: [Option<Transform>; 21] = std::array::from_fn(|k| edits.and_then(|e| e.parts[k].adjust()));
-    // The parts' own bones: the mapped joints, then the spine's bones in the spans of Spine0 to Spine3 (ValveBiped's
-    // Spine1, Spine2, Spine4 one each, as M10 had them).
-    let mut own: Vec<(usize, usize)> = (0..21).filter_map(|k| class.map[k].map(|b| (b, k))).collect();
-    let chain = rigs::spine_chain(s, &class.map);
-    let (spine, neck) = (bind[7], bind[11]);
-    for (i, &b) in chain.iter().enumerate() {
-        let k = if chain.len() == 3 {
-            8 + i
-        } else {
-            let t = (at[b].0 * M - spine).dot(neck - spine) / (neck - spine).length_squared().max(1e-6);
-            7 + spread.iter().filter(|&&x| t >= x).count()
-        };
-        own.push((b, k));
-    }
-    own.sort_by_key(|&(_, k)| k);
-    // Every other physics bone is carried by its nearest own ancestor's part (hair, coats, tails stay on the body).
-    let part_of = |mut b: usize| -> usize {
-        loop {
-            if let Some(&(_, k)) = own.iter().find(|o| o.0 == b) {
-                return k;
-            }
-            match s.bones[b].parent {
-                Some(p) => b = p,
-                None => return 0,
-            }
-        }
-    };
-    let carried: Vec<(usize, usize)> = (0..s.bones.len()).filter(|&b| s.has_object(b) && !own.iter().any(|o| o.0 == b)).map(|b| (b, part_of(b))).collect();
-    let posed: Vec<Posed> = own
-        .iter()
-        .map(|&o| (o, true))
-        .chain(carried.iter().map(|&c| (c, false)))
-        .map(|((b, k), own)| {
-            // The bone as the stance has it: turned with its part about the part's joint.
-            let (pos, rot) = (joints[k] + turn[k] * (at[b].0 * M - bind[k]), (turn[k] * at[b].1).normalize());
-            let f = frames[k];
-            let (mut at, mut turn) = (f.rotation.inverse() * (pos - f.translation), (f.rotation.inverse() * rot).normalize());
-            if let Some(a) = adjust[k] {
-                (at, turn) = (a.rotation.inverse() * (at - a.translation), (a.rotation.inverse() * turn).normalize());
-            }
-            Posed { bone: s.bones[b].name.clone(), part: k, at, turn, own }
-        })
-        .collect();
-    let finish: Vec<(String, String)> = own
-        .iter()
-        .filter(|o| !s.has_object(o.0))
-        .filter_map(|&(b, _)| {
-            let mut at = s.bones[b].parent;
-            while let Some(p) = at {
-                if s.has_object(p) {
-                    return Some((s.bones[b].name.clone(), s.bones[p].name.clone()));
-                }
-                at = s.bones[p].parent;
-            }
-            None
-        })
-        .collect();
-    let shown: Vec<Transform> = (0..21)
-        .map(|k| {
-            let (f, back) = (frames[k], turn[k].inverse());
-            let t = Transform::from_translation(bind[k] + back * (f.translation - joints[k])).with_rotation((back * f.rotation).normalize());
-            match adjust[k] {
-                Some(a) => Transform::from_translation(t.translation + t.rotation * a.translation).with_rotation((t.rotation * a.rotation).normalize()),
-                None => t,
-            }
-        })
-        .collect();
-    let (height, mass) = (height(&body), body.parts.iter().map(|p| p.mass).sum::<f32>());
-    let mut warnings: Vec<String> = made.iter().map(|m| format!("no {m} bone: put between its neighbours")).collect();
-    if (height - TUNED_HEIGHT).abs() > HEIGHT_WARN {
-        warnings.push(format!("{height:.2} m tall: Delirium's behaviours are tuned for about {TUNED_HEIGHT} m and work worse this far from it"));
-    }
-    warnings.extend(report);
-    let unphysical = own.iter().filter(|o| !s.has_object(o.0)).count();
-    if unphysical > 6 {
-        warnings.push(format!("{unphysical} of NM's bones have no physics object here: they're drawn on the client only"));
-    }
-    if finish.len() > FINISH_MAX {
-        warnings.push(format!("{} bones to finish on the client: only the first {FINISH_MAX} are", finish.len()));
-    }
-    let map = std::array::from_fn(|k| class.map[k].map(|b| s.bones[b].name.clone()));
-    Ok(Fitted {
-        def: Arc::new(BodyDef { build, body, fitted: true }),
-        checksum: s.checksum,
-        frames,
-        joints: joints.to_vec(),
-        posed,
-        finish,
-        warnings,
-        height,
-        mass,
-        rig: class.rig,
-        map,
-        names: names.map(<[_]>::to_vec),
-        edits: edits.cloned(),
-        shown_joints: bind.to_vec(),
-        shown,
-    })
-}
-
-/// The most bones the client finishes (each takes two NW2 vars on the ragdoll).
-pub const FINISH_MAX: usize = 16;
-
-/// The body's height (m): its lowest point to its highest, its parts' capsules as they stand.
-fn height(body: &dms_game::body::Body) -> f32 {
-    let (lo, hi) = body.parts.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
-        let r = p.radius + p.half;
-        (lo.min(p.pos.z - r), hi.max(p.pos.z + r))
-    });
-    hi - lo
 }
 
 native!(model_skeleton => model_skeleton_impl);
@@ -658,64 +290,6 @@ unsafe fn push_fit_summary(api: &Api, l: *mut LuaState, f: &Fitted) {
         push_map(api, l, &f.map);
         (api.setfield)(l, -2, c"map".as_ptr());
     }
-}
-
-native!(fit_preview => fit_preview_impl);
-/// `DMS.FitPreview(model, mdl[, mapping[, edits]])`: Homer's build fitted to the `.mdl` by `mapping` (or its rig) and the player's `edits` without
-/// keeping it, for the mapping editor: `{height, mass, rig, warnings, map, parts = {{name, pos, mass, radius_m, half_m | box, ang, shape = "capsule",
-/// a, b, radius} | {name, pos, ang, shape = "box", half}, ...}, joints = {pos, ...}}`, the parts as they lie over the
-/// model in its own pose (units, the model's space; `a`, `b` a capsule's ends, `half` a box's half extents). A Lua error
-/// for a mapping that can't be fitted.
-unsafe fn fit_preview_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
-    let model = unsafe { api.check_string(l, 1)? };
-    let s = read_mdl(unsafe { api.check_bytes(l, 2)? })?;
-    let names = unsafe { mapping_arg(api, l, 3)? };
-    let edits = unsafe { edits_arg(api, l, 4)? };
-    let d = data::get().ok_or_else(|| format!("NM's data isn't loaded (DMS.LoadData): {}", data::how_to()))?;
-    let f = fit(&d, &s, &model, names.as_deref(), edits.as_ref())?;
-    unsafe {
-        (api.createtable)(l, 0, 8);
-        push_fit_summary(api, l, &f);
-        (api.createtable)(l, 21, 0);
-        for (k, (p, t)) in f.def.body.parts.iter().zip(&f.shown).enumerate() {
-            (api.createtable)(l, 0, 7);
-            api.set_str(l, c"name", p.name);
-            api.set_vector(l, c"pos", &(t.translation / M).to_array());
-            api.set_number(l, c"mass", f64::from(p.mass));
-            let bp = &f.def.build.parts[k];
-            match bp.boxed {
-                Some(b) => api.set_vector(l, c"box", &b.to_array()),
-                None => {
-                    api.set_number(l, c"radius_m", f64::from(bp.radius));
-                    api.set_number(l, c"half_m", f64::from(bp.half));
-                }
-            }
-            match p.shape {
-                dms_game::body::Shape::Capsule { rot, radius, half } => {
-                    let axis = t.rotation * rot * Vec3::Y * half;
-                    api.set_str(l, c"shape", "capsule");
-                    api.set_vector(l, c"a", &((t.translation - axis) / M).to_array());
-                    api.set_vector(l, c"b", &((t.translation + axis) / M).to_array());
-                    api.set_number(l, c"radius", f64::from(radius / M));
-                }
-                dms_game::body::Shape::Box { rot, half } => {
-                    api.set_str(l, c"shape", "box");
-                    api.set_vector(l, c"ang", &angles(t.rotation * rot));
-                    api.set_vector(l, c"half", &(half / M).to_array());
-                }
-            }
-            api.append(l, k + 1);
-        }
-        (api.setfield)(l, -2, c"parts".as_ptr());
-        (api.createtable)(l, 21, 0);
-        // Where the joints are over the model's own pose (moved as edited).
-        for (k, j) in f.shown_joints.iter().enumerate() {
-            api.push_vector(l, &(*j / M).to_array());
-            api.append(l, k + 1);
-        }
-        (api.setfield)(l, -2, c"joints".as_ptr());
-    }
-    Ok(1)
 }
 
 native!(ragdoll_forget => ragdoll_forget_impl);

@@ -206,8 +206,11 @@ by default). Lua: `DMS_ReactAt(ent, kind, rest, hit, from, impulse)`, the Playro
 | `dms_ragdoll [model]` | a model's ragdoll (default male_07) in front of the player on a fitted body, NM, `bodyBalance` |
 | `dms_fit [model]` | the model's fit: its rig, height, mass, warnings (kept by the model, its checksum and mapping) |
 | `dms_rig [model]` | what the model's skeleton is to DMS: its rig (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD, `by names`, `mapped`, `unknown`, `not humanoid`), the bone at each NM joint, what's missing, the reader's report (docs/adr/0030) |
-| `dms_rig_edit [model] [part]` (client) | the DMS window's rig editor on a model (default: the one under the crosshair, else the player's), a part picked: a bone per joint, joints moved, parts' sizes, masses and placement on the model; tried on the ragdolls in the world, saved in `data/dms/skeletons/<model>.json`, copied/pasted as text |
 | `dms_rig_view 1` (client) | NM's bodies (capsules) drawn over the ragdolls with NM near you (superadmins) |
+
+A model's rig made by hand is `data/dms/skeletons/<model path without models/ and .mdl>.json` (docs/adr/0030): a bone
+per NM part, joints moved, parts' sizes, masses and placement on the model. The addon reads it again as the file changes
+and puts NM again on the model's ragdolls by it; copy the file to share it.
 | `dms_autoattach_ragdolls 1` | NM on humanoid ragdolls spawned from the spawn menu (off by default) |
 | `dms_send <line>` | an NM message to the Homer under the crosshair (from the server console: to all) |
 | `dms_react <reaction> [key=value …]` | a reaction of the Homer under the crosshair; without `at=`, the crosshair's point |
