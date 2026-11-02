@@ -1,4 +1,4 @@
-# DMS in Gmod
+# Delirium Physics in GMod
 
 Delirium natively in Garry's Mod, in **FOLLOW** mode: the body is an
 ordinary `prop_ragdoll` on the [VPhysics-Box3D](vphysics/) physics (a fork with `IPhysicsNM` and joint armature), and
