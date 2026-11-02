@@ -128,8 +128,15 @@ fn clouds(skel: &Skeleton, mesh: &Mesh, map: &[Option<String>; 21], joints: &[Ve
             }
         })
         .collect();
+    // Only the vertices drawn: the `.vvd` also holds the other body groups' (a model's held props, its other heads).
+    let mut drawn = vec![false; mesh.pos.len()];
+    for &i in mesh.tris.iter().flatten() {
+        if let Some(d) = drawn.get_mut(i as usize) {
+            *d = true;
+        }
+    }
     let (mut firm, mut all) = (vec![vec![]; 21], vec![vec![]; 21]);
-    for (p, bones) in mesh.pos.iter().zip(&mesh.bones) {
+    for ((p, bones), _) in mesh.pos.iter().zip(&mesh.bones).zip(&drawn).filter(|x| *x.1) {
         let Some((b, w)) = bones.iter().filter(|x| x.1 > 0.0).max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| (x.0 as usize, x.1)) else { continue };
         let Some(mut k) = part_of.get(b).copied().flatten() else { continue };
         let p = Vec3::from_array(*p) * M;
