@@ -349,6 +349,92 @@ pub fn spine_chain(s: &Skeleton, m: &Map) -> Vec<usize> {
     vec![]
 }
 
+/// The player's edits of a model's fit (the mapping editor, docs/adr/0030): where NM's joints are against their bones
+/// (the fit's input, as the spine's spread), and the parts' sizes, masses and how they lie on the model's bones. None by
+/// default; Homer and the golden runs never have them.
+#[derive(Clone, PartialEq, Default)]
+pub struct Edits {
+    /// Each joint moved from where its bone put it (units, the model's space, its own pose).
+    pub joints: [Vec3; 21],
+    pub parts: [PartEdit; 21],
+}
+
+/// One part's edits: its capsule's radius and half length or its box's half extents (m), its mass (kg), and where it lies
+/// on the model's bone: moved (m, the part's frame) and turned (pitch, yaw, roll; degrees).
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct PartEdit {
+    pub radius: Option<f32>,
+    pub half: Option<f32>,
+    pub boxed: Option<Vec3>,
+    pub mass: Option<f32>,
+    pub offset: Vec3,
+    pub turn: Vec3,
+}
+
+impl PartEdit {
+    /// The part's placement on the model's bone: moved, then turned.
+    pub fn adjust(&self) -> Option<Transform> {
+        if self.offset == Vec3::ZERO && self.turn == Vec3::ZERO {
+            return None;
+        }
+        let [p, y, r] = self.turn.to_array().map(f32::to_radians);
+        // Source's angles: yaw about Z, pitch about Y, roll about X.
+        let rot = Quat::from_rotation_z(y) * Quat::from_rotation_y(p) * Quat::from_rotation_x(r);
+        Some(Transform::from_translation(self.offset).with_rotation(rot.normalize()))
+    }
+}
+
+/// A build's part sizes as edited: a capsule's radius and half length or a box's extents, its inertia scaled as the
+/// shape's own moments are.
+pub fn apply_sizes(build: &mut delirium::ragdoll::Build, e: &Edits) {
+    // A shape's moments per unit mass, along the part's axes (`PartDef::moments`' formulas).
+    let moments = |p: &delirium::ragdoll::PartDef| match p.boxed {
+        Some(h) => Vec3::new(h.y * h.y + h.z * h.z, h.x * h.x + h.z * h.z, h.x * h.x + h.y * h.y) / 3.0,
+        None => {
+            let (r, l) = (p.radius, 2.0 * (p.half + p.radius));
+            Vec3::new((3.0 * r * r + l * l) / 12.0, 0.5 * r * r, (3.0 * r * r + l * l) / 12.0)
+        }
+    };
+    for (p, pe) in build.parts.iter_mut().zip(&e.parts) {
+        let before = moments(p);
+        match p.boxed {
+            Some(_) => {
+                if let Some(h) = pe.boxed.filter(|h| h.min_element() > 0.0) {
+                    p.boxed = Some(h);
+                    p.radius = h.min_element();
+                }
+            }
+            None => {
+                p.radius = pe.radius.filter(|&r| r > 0.0).unwrap_or(p.radius);
+                p.half = pe.half.filter(|&h| h >= 0.0).unwrap_or(p.half);
+            }
+        }
+        let after = moments(p);
+        if p.inertia.min_element() > 0.0 && before.min_element() > 0.0 {
+            p.inertia *= after / before;
+        }
+    }
+}
+
+/// The parts' masses as edited: each `heft` scaled so NM weighs the part `mass` (`now` its masses as NM has them).
+pub fn apply_masses(build: &mut delirium::ragdoll::Build, e: &Edits, now: &[f32]) {
+    for ((p, pe), &m) in build.parts.iter_mut().zip(&e.parts).zip(now) {
+        if let Some(want) = pe.mass.filter(|&w| w > 0.0) {
+            p.heft *= want / m.max(1e-3);
+        }
+    }
+}
+
+impl Edits {
+    pub fn sizes(&self) -> bool {
+        self.parts.iter().any(|p| p.radius.is_some() || p.half.is_some() || p.boxed.is_some())
+    }
+
+    pub fn masses(&self) -> bool {
+        self.parts.iter().any(|p| p.mass.is_some())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

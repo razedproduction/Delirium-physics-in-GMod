@@ -790,19 +790,23 @@ local function refresh()
 	fillAbout()
 end
 
--- The mapping editor (ROADMAP M12, skeletons.lua): a bone of the model per NM joint, the fitted capsules drawn over
--- the model in its own pose as the mapping changes; saved on the server (data/dms/skeletons), copied and pasted as text.
-local sk = { map = {} } -- the model being mapped, as the server last sent it; kept between windows
+-- The rig editor (ROADMAP M12, skeletons.lua, docs/adr/0030): a bone of the model per NM joint, the joints moved, each
+-- part's size, mass and how it lies on the model, the fitted capsules drawn over the model in its own pose as it
+-- changes; tried on the ragdolls in the world (their NM bodies drawn there, cl_rig_view.lua), saved on the server
+-- (data/dms/skeletons), copied and pasted as text.
+local sk = { rig = { bones = {}, joints = {}, parts = {} } } -- the model being edited, as the server last sent it; kept between windows
 
 -- NM's part names as the editor shows them.
 local PART_LABEL = {
 	Buttocks = "Pelvis", Thigh_Left = "Left thigh", Shin_Left = "Left shin", Foot_Left = "Left foot", Thigh_Right = "Right thigh",
-	Shin_Right = "Right shin", Foot_Right = "Right foot", Spine0 = "Spine", Neck = "Neck", Head = "Head",
-	Clavicle_Left = "Left clavicle", Upper_Arm_Left = "Left upper arm", Lower_Arm_Left = "Left forearm", Hand_Left = "Left hand",
-	Clavicle_Right = "Right clavicle", Upper_Arm_Right = "Right upper arm", Lower_Arm_Right = "Right forearm", Hand_Right = "Right hand",
+	Shin_Right = "Right shin", Foot_Right = "Right foot", Spine0 = "Spine", Spine1 = "Spine 1", Spine2 = "Spine 2", Spine3 = "Spine 3",
+	Neck = "Neck", Head = "Head", Clavicle_Left = "Left clavicle", Upper_Arm_Left = "Left upper arm", Lower_Arm_Left = "Left forearm",
+	Hand_Left = "Left hand", Clavicle_Right = "Right clavicle", Upper_Arm_Right = "Right upper arm", Lower_Arm_Right = "Right forearm",
+	Hand_Right = "Right hand",
 }
 local SPREAD = { Spine1 = true, Spine2 = true, Spine3 = true }
 local NONE = "(between its neighbours)"
+local CM = 2.54 -- cm a unit
 
 -- A bone's frame (units, quaternion {x, y, z, w}) as a matrix.
 local function frame(p, q)
@@ -815,6 +819,13 @@ local function frame(p, q)
 	})
 end
 
+-- The fitted part `name` as the server last sent it.
+local function skPart(name)
+	for _, p in ipairs(sk.preview and sk.preview.parts or {}) do
+		if p.name == name then return p end
+	end
+end
+
 local function skStatus()
 	if not IsValid(ui.skStatus) then return end
 	local lines = {}
@@ -822,16 +833,17 @@ local function skStatus()
 		lines[1] = sk.error
 	elseif sk.model then
 		local c = sk.class or {}
-		lines[#lines + 1] = string.format("%s: %s skeleton%s, %d bones", sk.model, c.rig or "?", sk.saved and " (a mapping is saved for it)" or "", #(sk.bones or {}))
+		lines[#lines + 1] = string.format("%s: %s skeleton, %d bones%s%s", sk.model, c.rig or "?", #(sk.bones or {}),
+			sk.saved and "; a rig is saved for it" or "", sk.draft and "; a rig is being tried on its ragdolls (not saved)" or "")
 		local pv = sk.preview or {}
 		if pv.error then
-			lines[#lines + 1] = "Can't be fitted with this mapping: " .. pv.error
+			lines[#lines + 1] = "Can't be fitted so: " .. pv.error
 		elseif pv.height then
 			lines[#lines + 1] = string.format("Fitted: %.2f m, %.1f kg (Homer 1.77 m, 77.7 kg)", pv.height, pv.mass)
 			for _, w in ipairs(pv.warnings or {}) do lines[#lines + 1] = "Warning: " .. w end
 		end
 		for _, r in ipairs(c.report or {}) do if not (pv.warnings and table.HasValue(pv.warnings, r)) then lines[#lines + 1] = "Reader: " .. r end end
-		if sk.imported then lines[#lines + 1] = "Imported a mapping made for " .. sk.imported .. ": check it, then save it" end
+		if sk.imported then lines[#lines + 1] = "Imported a rig made for " .. sk.imported .. ": check it, then save it" end
 		if sk.note then lines[#lines + 1] = sk.note end
 	else
 		lines[1] = "Pick a model: the one under your crosshair, your own, or type its path."
@@ -842,7 +854,50 @@ end
 
 local function skFit()
 	if not sk.model then return end
-	timer.Create("DMS_SkeletonFit", 0.15, 1, function() request({ kind = "skeleton_fit", model = sk.model, map = sk.map }) end)
+	sk.imported, sk.note = nil, nil
+	timer.Create("DMS_SkeletonFit", 0.15, 1, function() request({ kind = "skeleton_fit", model = sk.model, rig = sk.rig }) end)
+end
+
+-- The part editor's sliders: each reads its value from the rig (or the fit) and writes it to the rig.
+local function skRefill()
+	if not ui.skSliders then return end
+	quietly(function()
+		for _, s in ipairs(ui.skSliders) do
+			if IsValid(s.panel) and not s.panel:IsEditing() then
+				local v = sk.sel and s.get(sk.sel)
+				if v then s.panel:SetValue(v) end
+			end
+		end
+	end)
+	local p = sk.sel and skPart(sk.sel)
+	for _, s in ipairs(ui.skSliders) do
+		if IsValid(s.panel) then
+			local show = sk.sel ~= nil and (not s.only or (p and ((s.only == "box") == (p.box ~= nil))))
+			if s.panel:IsVisible() ~= (show and true or false) then
+				s.panel:SetVisible(show and true or false)
+				s.panel:GetParent():InvalidateLayout()
+			end
+		end
+	end
+	if IsValid(ui.skSelected) then
+		ui.skSelected:SetText(sk.sel and ("Editing: " .. (PART_LABEL[sk.sel] or sk.sel) .. (SPREAD[sk.sel] and " (spread between the spine and the neck)" or ""))
+			or "Click a part's name in the list to edit its joint, size, mass and placement (or drag its joint with the right mouse button in the view).")
+	end
+end
+
+local function skSelect(part)
+	sk.sel = part
+	skRefill()
+end
+
+-- The rig's edits of a part, made when first written.
+local function partEdits(part, make)
+	local e = sk.rig.parts[part]
+	if not e and make then
+		e = {}
+		sk.rig.parts[part] = e
+	end
+	return e
 end
 
 local function skFill()
@@ -850,6 +905,7 @@ local function skFill()
 	ui.skList:Clear()
 	local view = ui.skView
 	skStatus()
+	skRefill()
 	if not sk.bones then
 		if IsValid(view) and IsValid(view.Entity) then
 			view.Entity:Remove()
@@ -860,40 +916,62 @@ local function skFill()
 	local names = {}
 	for i, b in ipairs(sk.bones) do names[i] = b.name end
 	for _, part in ipairs((sk.class or {}).parts or {}) do
-		if not SPREAD[part] then
-			local r = row(ui.skList, 22)
-			r.dmsPart = part
-			local optional = sk.class.optional and sk.class.optional[part]
-			label(r, (PART_LABEL[part] or part) .. (optional and "" or " *"), 120)
+		local r = row(ui.skList, 22)
+		r.dmsPart = part
+		r:SetMouseInputEnabled(true)
+		r:SetCursor("hand")
+		r.OnMousePressed = function() skSelect(part) end
+		r.Paint = function(_, w, h)
+			if sk.sel == part then
+				surface.SetDrawColor(C.hover)
+				surface.DrawRect(0, 0, w, h)
+				surface.SetDrawColor(C.accent)
+				surface.DrawRect(0, 0, 3, h)
+			end
+		end
+		local optional = sk.class.optional and sk.class.optional[part]
+		local edited = sk.rig.joints[part] or sk.rig.parts[part]
+		local l = label(r, (PART_LABEL[part] or part) .. (optional and "" or " *") .. (edited and "  ~" or ""), 120)
+		l:DockMargin(6, 0, 0, 0)
+		if SPREAD[part] then
+			local s = label(r, "spread (no bone)", 160)
+			s:SetTextColor(C.dim)
+		else
 			local cb = r:Add("DComboBox")
 			cb:Dock(FILL)
 			cb:SetSortItems(false)
-			cb:AddChoice(optional and NONE or "(none)", "", not sk.map[part])
-			for _, n in ipairs(names) do cb:AddChoice(n, n, sk.map[part] == n) end
+			cb:AddChoice(optional and NONE or "(none)", "", not sk.rig.bones[part])
+			for _, n in ipairs(names) do cb:AddChoice(n, n, sk.rig.bones[part] == n) end
 			cb.OnSelect = function(_, _, _, v)
-				sk.map[part] = v ~= "" and v or nil
-				sk.imported, sk.note = nil, nil
+				sk.rig.bones[part] = v ~= "" and v or nil
+				skSelect(part)
 				skFit()
 			end
-			help(r, PART_LABEL[part] or part, "The model's bone at NM's " .. part .. " joint (where the part meets its parent; the pelvis' and head's own bone). * needed; the neck and clavicles may be left out (put between their neighbours). NM's Spine1-3 are spread between the spine and the neck as Homer's are.\n\nIts capsule shows in white over the model while the cursor is here.")
 		end
+		help(r, PART_LABEL[part] or part, "The model's bone at NM's " .. part .. " joint (where the part meets its parent; the pelvis' and head's own bone). * needed; the neck and clavicles may be left out (put between their neighbours). NM's Spine1-3 are spread between the spine and the neck as Homer's are. ~ edited.\n\nClick the name to edit the part below; its capsule shows in white over the model.")
 	end
 	if IsValid(view) and view:GetModel() ~= sk.model then
 		view:SetModel(sk.model)
+		view.dmsFramed, view.dmsZoom = nil, 1
 		local ent = view:GetEntity()
 		if IsValid(ent) then
+			ent:SetLOD(0)
 			-- The model in its own pose (the mesh's bind), as the server read it from the .mdl.
 			ent:AddCallback("BuildBonePositions", function(e, n)
 				local bones = sk.bones
 				if not bones or e:GetModel() ~= sk.model then return end
 				local world = e:GetWorldTransformMatrix()
-				-- Bones the engine doesn't set up for this draw (another LOD's, unused) can't be written.
-				e.dmsSkip = e.dmsSkip or {}
-				for i = 0, math.min(n, #bones) - 1 do
-					if not e.dmsSkip[i] then
-						local b = bones[i + 1]
-						if not pcall(e.SetBoneMatrix, e, i, world * frame(b.pos, b.rot)) then e.dmsSkip[i] = true end
+				-- Only the bones the mesh is skinned to at LOD 0 (the view draws that LOD): the engine doesn't set up the others
+				-- for a draw, and writing them is an error (printed, not thrown).
+				if not e.dmsSkin then
+					e.dmsSkin = {}
+					for i = 0, n - 1 do
+						if e:BoneHasFlag(i, BONE_USED_BY_VERTEX_LOD0) then e.dmsSkin[#e.dmsSkin + 1] = i end
 					end
+				end
+				for _, i in ipairs(e.dmsSkin) do
+					local b = bones[i + 1]
+					if b then e:SetBoneMatrix(i, world * frame(b.pos, b.rot)) end
 				end
 			end)
 		end
@@ -902,7 +980,7 @@ end
 
 local function skLoad(model)
 	if not model or model == "" then return end
-	sk = { model = model, map = {} }
+	sk = { model = model, rig = { bones = {}, joints = {}, parts = {} } }
 	if IsValid(ui.skEntry) then ui.skEntry:SetValue(model) end
 	skStatus()
 	request({ kind = "skeleton", model = model })
@@ -914,12 +992,11 @@ local function skDraw(view, ent)
 	if not pv or not pv.parts then return end
 	local h = vgui.GetHoveredPanel()
 	while IsValid(h) and not h.dmsPart do h = h:GetParent() end
-	local hover = IsValid(h) and h.dmsPart
+	local hover = IsValid(h) and h.dmsPart or sk.sel
 	local V = function(t) return ent:LocalToWorld(Vector(t.x, t.y, t.z)) end
 	render.SetColorMaterial()
 	for _, part in ipairs(pv.parts) do
-		local on = part.name == hover
-		local col = on and color_white or Color(255, 196, 70, 180)
+		local col = part.name == hover and color_white or Color(255, 196, 70, 180)
 		if part.shape == "capsule" then
 			local a, b, r = V(part.a), V(part.b), part.radius
 			render.DrawWireframeSphere(a, r, 6, 6, col, false)
@@ -933,19 +1010,37 @@ local function skDraw(view, ent)
 			render.DrawWireframeBox(V(part.pos), ent:LocalToWorldAngles(Angle(part.ang.x, part.ang.y, part.ang.z)), -half, half, col, false)
 		end
 	end
+	local parts = (sk.class or {}).parts or {}
 	for i, j in ipairs(pv.joints or {}) do
-		render.DrawSphere(V(j), 0.8, 6, 6, Color(90, 200, 255))
+		local on = parts[i] == hover
+		render.DrawSphere(V(j), on and 1.4 or 0.8, 8, 8, on and Color(255, 80, 80) or Color(90, 200, 255))
 	end
 	-- The hovered joint's bone as the model has it.
-	local bone = hover and sk.map[hover]
+	local bone = hover and sk.rig.bones[hover]
 	for _, b in ipairs(bone and sk.bones or {}) do
-		if b.name == bone then render.DrawSphere(V(b.pos), 1.4, 8, 8, Color(255, 80, 80)) end
+		if b.name == bone then render.DrawWireframeSphere(V(b.pos), 2, 8, 8, Color(255, 80, 80), false) end
 	end
+end
+
+-- A joint dragged in the view (right mouse): moved in the camera's plane, in the model's space.
+local function skDrag(view, ent, dx, dy)
+	local part = sk.sel
+	if not part or not sk.preview or not IsValid(ent) then return end
+	local cam, look = view:GetCamPos(), view:GetLookAt()
+	local fwd = (look - cam):GetNormalized()
+	local right = fwd:Cross(Vector(0, 0, 1)):GetNormalized()
+	local up = right:Cross(fwd)
+	local per = 2 * cam:Distance(look) * math.tan(math.rad(view:GetFOV() / 2)) / math.max(view:GetTall(), 1)
+	local d = WorldToLocal((right * dx - up * dy) * per, angle_zero, vector_origin, ent:GetAngles())
+	local j = sk.rig.joints[part] or { 0, 0, 0 }
+	sk.rig.joints[part] = { j[1] + d.x, j[2] + d.y, j[3] + d.z }
+	skRefill()
+	skFit()
 end
 
 local function skeletonsTab(p)
 	heading(p, "Skeletons (Workshop models, other humanoids)")
-	note(p, "NM drives any humanoid model whose joints it knows: ValveBiped, the common rigs (Biped, Mixamo, Unreal, TF2, VRoid, MMD) and models whose bone names say it. For any other humanoid pick a bone for each joint here once: the fitted capsules show over the model as you go. Saved mappings live on the server (data/dms/skeletons) and travel as text. Animals and robots without a humanoid chain aren't supported.")
+	note(p, "NM drives any humanoid model whose joints it knows: ValveBiped, the common rigs (Biped, Mixamo, Unreal, TF2, VRoid, MMD) and models whose bone names say it. Here a model's rig is made by hand: a bone for each joint, the joints moved, each part's size, mass and how it lies on the model, the fitted capsules over the model as you go. Try it on the model's ragdolls in the world, then save it (data/dms/skeletons, shared as text). Sizes and masses change this model's NM body only; Homer's never. Animals and robots without a humanoid chain aren't supported.")
 	local r = row(p)
 	local entry = r:Add("DTextEntry")
 	entry:Dock(LEFT)
@@ -962,16 +1057,12 @@ local function skeletonsTab(p)
 	local aimedAt = button(r, "Under your crosshair", "The model of the ragdoll, NPC or player under your crosshair (close the window to aim).", function()
 		local ent = LocalPlayer():GetEyeTrace().Entity
 		if not IsValid(ent) then return notification.AddLegacy("DMS: nothing under your crosshair", NOTIFY_ERROR, 3) end
-		entry:SetValue(ent:GetModel())
 		skLoad(ent:GetModel())
 	end)
 	aimedAt:Dock(LEFT)
 	aimedAt:DockMargin(6, 0, 0, 0)
 	aimedAt:SetWide(150)
-	local mine = button(r, "Your model", "Your player model.", function()
-		entry:SetValue(LocalPlayer():GetModel())
-		skLoad(LocalPlayer():GetModel())
-	end)
+	local mine = button(r, "Your model", "Your player model.", function() skLoad(LocalPlayer():GetModel()) end)
 	mine:Dock(LEFT)
 	mine:DockMargin(6, 0, 0, 0)
 	mine:SetWide(90)
@@ -979,73 +1070,188 @@ local function skeletonsTab(p)
 	local body = row(p, 430)
 	local list = styleScroll(body:Add("DScrollPanel"))
 	list:Dock(LEFT)
-	list:SetWide(340)
+	list:SetWide(330)
 	list:GetCanvas():DockPadding(0, 0, 8, 0)
 	ui.skList = list
 	local view = body:Add("DModelPanel")
 	view:Dock(FILL)
 	view:DockMargin(8, 0, 0, 0)
-	view.dmsYaw = 0
+	view.dmsYaw, view.dmsZoom = 0, 1
 	view.Paint = function(self, w, h)
 		paintPane(self, w, h)
 		DModelPanel.Paint(self, w, h)
 	end
-	-- Turned by dragging; framed on the fitted body.
+	-- Turned by the left mouse, a joint moved by the right, zoomed by the wheel; framed on the body once it's fitted.
 	view.LayoutEntity = function(self, ent)
-		if self.dmsDrag then
-			local x = gui.MouseX()
-			self.dmsYaw = self.dmsYaw + (x - self.dmsDrag) * 0.6
-			self.dmsDrag = x
+		local mx, my = gui.MousePos()
+		if self.dmsTurn then
+			self.dmsYaw = self.dmsYaw + (mx - self.dmsTurn) * 0.6
+			self.dmsTurn = mx
 		end
 		ent:SetAngles(Angle(0, self.dmsYaw, 0))
+		if self.dmsMove then
+			local dx, dy = mx - self.dmsMove[1], my - self.dmsMove[2]
+			self.dmsMove = { mx, my }
+			if dx ~= 0 or dy ~= 0 then skDrag(self, ent, dx, dy) end
+		end
 		local js = sk.preview and sk.preview.joints
-		if js and #js > 0 then
+		if not self.dmsFramed and js and #js > 0 then
 			local lo, hi = Vector(math.huge, math.huge, math.huge), Vector(-math.huge, -math.huge, -math.huge)
 			for _, j in ipairs(js) do
-				local v = Vector(j.x, j.y, j.z)
-				lo = Vector(math.min(lo.x, v.x), math.min(lo.y, v.y), math.min(lo.z, v.z))
-				hi = Vector(math.max(hi.x, v.x), math.max(hi.y, v.y), math.max(hi.z, v.z))
+				lo = Vector(math.min(lo.x, j.x), math.min(lo.y, j.y), math.min(lo.z, j.z))
+				hi = Vector(math.max(hi.x, j.x), math.max(hi.y, j.y), math.max(hi.z, j.z))
 			end
-			local c, size = (lo + hi) / 2, math.max((hi - lo):Length(), 20)
-			self:SetLookAt(c)
-			self:SetCamPos(c + Vector(size * 1.3, 0, size * 0.1))
+			self.dmsFramed = { centre = (lo + hi) / 2, size = math.max((hi - lo):Length(), 20) }
+			-- Facing the camera: forward from the thighs (NM's Thigh_Left, Thigh_Right), as NM's face takes it.
+			local l, r = js[2], js[5]
+			local fwd = Vector(0, 0, 1):Cross(Vector(r.x - l.x, r.y - l.y, 0))
+			if fwd:Length() > 0.1 then self.dmsYaw = -fwd:Angle().y end
+		end
+		local f = self.dmsFramed
+		if f then
+			self:SetLookAt(f.centre)
+			self:SetCamPos(f.centre + Vector(f.size * 1.3 * self.dmsZoom, 0, f.size * 0.1))
 		end
 	end
-	view.OnMousePressed = function(self, code) if code == MOUSE_LEFT then self.dmsDrag = gui.MouseX() end end
-	view.OnMouseReleased = function(self) self.dmsDrag = nil end
+	view.OnMousePressed = function(self, code)
+		if code == MOUSE_LEFT then self.dmsTurn = gui.MouseX() end
+		if code == MOUSE_RIGHT and sk.sel then self.dmsMove = { gui.MousePos() } end
+		self:MouseCapture(true)
+	end
+	view.OnMouseReleased = function(self)
+		self.dmsTurn, self.dmsMove = nil, nil
+		self:MouseCapture(false)
+	end
+	view.OnMouseWheeled = function(self, d)
+		self.dmsZoom = math.Clamp(self.dmsZoom * (d > 0 and 0.9 or 1.1), 0.2, 3)
+		return true
+	end
 	view.PostDrawModel = function(_, ent) skDraw(view, ent) end
 	view:SetFOV(40)
-	help(view, "The fit over the model", "The model in its own pose (the mesh's bind) with NM's parts fitted to the joints picked (yellow; the one under the cursor white) and the joints (blue). Drag to turn it.")
+	help(view, "The fit over the model", "The model in its own pose (the mesh's bind) with NM's parts fitted to it (yellow; the one picked or under the cursor white) and the joints (blue; the picked one red).\n\nLeft mouse: turn. Right mouse: move the picked part's joint. Wheel: zoom.")
 	ui.skView = view
+
+	-- The picked part: its joint, its size and mass, how it lies on the model.
+	ui.skSelected = note(p, "")
+	local ed = row(p, 200)
+	local left, right = ed:Add("DPanel"), ed:Add("DPanel")
+	left:Dock(LEFT)
+	left:SetWide(320)
+	left.Paint = nil
+	right:Dock(FILL)
+	right:DockMargin(12, 0, 0, 0)
+	right.Paint = nil
+	ui.skSliders = {}
+	local function add(parent, text, helpText, lo, hi, dec, get, set, only)
+		local s = slider(parent, text, helpText, lo, hi, dec, function(v)
+			if sk.sel then
+				set(sk.sel, v)
+				skFit()
+			end
+		end)
+		s.Label:SetWide(110)
+		ui.skSliders[#ui.skSliders + 1] = { panel = s, get = get, only = only }
+		return s
+	end
+	for i, axis in ipairs({ "X", "Y", "Z" }) do
+		add(left, "Joint " .. axis .. " (cm)", "Moves the joint from where its bone puts it (the model's own axes), as the fit's input: the parts on both sides follow. Also: right-drag in the view.", -40, 40, 1,
+			function(part) return (sk.rig.joints[part] or { 0, 0, 0 })[i] * CM end,
+			function(part, v)
+				local j = sk.rig.joints[part] or { 0, 0, 0 }
+				j[i] = v / CM
+				sk.rig.joints[part] = (j[1] == 0 and j[2] == 0 and j[3] == 0) and nil or j
+			end)
+	end
+	add(left, "Radius (cm)", "The capsule's radius.", 1, 30, 1,
+		function(part) local e, q = partEdits(part), skPart(part) return (e and e.radius or q and q.radius_m or 0) * 100 end,
+		function(part, v) partEdits(part, true).radius = v / 100 end, "capsule")
+	add(left, "Half length (cm)", "The capsule's half length (its cylinder's, without the caps).", 0, 40, 1,
+		function(part) local e, q = partEdits(part), skPart(part) return (e and e.half or q and q.half_m or 0) * 100 end,
+		function(part, v) partEdits(part, true).half = v / 100 end, "capsule")
+	for i, axis in ipairs({ "x", "y", "z" }) do
+		add(left, "Box half " .. axis .. " (cm)", "The box's half extent along its own axis.", 1, 40, 1,
+			function(part)
+				local e, q = partEdits(part), skPart(part)
+				local b = e and e.box or q and q.box and { q.box.x, q.box.y, q.box.z }
+				return b and b[i] * 100 or 0
+			end,
+			function(part, v)
+				local e, q = partEdits(part, true), skPart(part)
+				e.box = e.box or (q and q.box and { q.box.x, q.box.y, q.box.z }) or { 0.1, 0.1, 0.1 }
+				e.box[i] = v / 100
+			end, "box")
+	end
+	add(left, "Mass (kg)", "The part's mass as NM weighs it (by default the fit's: Homer's by the cube of the size).", 0.2, 40, 2,
+		function(part) local e, q = partEdits(part), skPart(part) return e and e.mass or q and q.mass or 0 end,
+		function(part, v) partEdits(part, true).mass = v end)
+	for i, axis in ipairs({ "X", "Y", "Z" }) do
+		add(right, "Move " .. axis .. " (cm)", "Moves the part on the model's bone (the part's own axes): where the model is drawn on it. NM's body stays as fitted.", -20, 20, 1,
+			function(part) local e = partEdits(part) return e and e.offset and e.offset[i] * 100 or 0 end,
+			function(part, v)
+				local e = partEdits(part, true)
+				e.offset = e.offset or { 0, 0, 0 }
+				e.offset[i] = v / 100
+			end)
+	end
+	for i, axis in ipairs({ "Pitch", "Yaw", "Roll" }) do
+		add(right, axis .. " (deg)", "Turns the part on the model's bone (a head or hand that sits crooked on its capsule). NM's body stays as fitted.", -90, 90, 0,
+			function(part) local e = partEdits(part) return e and e.turn and e.turn[i] or 0 end,
+			function(part, v)
+				local e = partEdits(part, true)
+				e.turn = e.turn or { 0, 0, 0 }
+				e.turn[i] = v
+			end)
+	end
+	local reset = button(right, "Reset this part", "The picked part's joint, size, mass and placement back to the fit's.", function()
+		if not sk.sel then return end
+		sk.rig.joints[sk.sel], sk.rig.parts[sk.sel] = nil, nil
+		skRefill()
+		skFit()
+	end)
+	reset:Dock(TOP)
+	reset:DockMargin(0, 6, 0, 0)
+
 	local b = row(p)
 	local function act(text, helpText, fn, w)
 		local x = button(b, text, helpText, fn)
 		x:Dock(LEFT)
 		x:DockMargin(0, 0, 6, 0)
-		x:SetWide(w or 150)
+		x:SetWide(w or 130)
 	end
-	act("Save the mapping", "Keeps this mapping on the server for the model (data/dms/skeletons/<model>.json): NM uses it from now on.", function()
-		if sk.model then request({ kind = "skeleton_save", model = sk.model, map = sk.map }) end
-	end)
-	act("The rig's own", "Back to what DMS finds by itself (the known rig or the bone names), without saving.", function()
+	act("Try it in the world", "NM again on this model's ragdolls in the world with this rig (a new one in front of you if there's none), their NM bodies drawn over them. Not saved.", function()
 		if not sk.model then return end
-		request({ kind = "skeleton", model = sk.model, own = true })
+		RunConsoleCommand("dms_rig_view", "1")
+		request({ kind = "skeleton_try", model = sk.model, rig = sk.rig })
+	end, 140)
+	act("Save", "Keeps this rig on the server for the model (data/dms/skeletons/<model>.json): NM uses it from now on.", function()
+		if sk.model then request({ kind = "skeleton_save", model = sk.model, rig = sk.rig }) end
+	end, 70)
+	act("Drop the tried one", "The rig tried in the world goes: the saved one (or the model's own) again.", function()
+		if sk.model then request({ kind = "skeleton_drop", model = sk.model }) end
+	end, 130)
+	act("The model's own", "Back to what DMS finds by itself (the known rig or the bone names), without edits; not saved.", function()
+		if sk.model then request({ kind = "skeleton", model = sk.model, own = true }) end
 	end, 120)
-	act("Delete the saved one", "Deletes the model's saved mapping: NM goes back to what it finds by itself.", function()
+	act("Delete saved", "Deletes the model's saved rig: NM goes back to what it finds by itself.", function()
 		if sk.model then request({ kind = "skeleton_delete", model = sk.model }) end
-	end, 160)
-	act("Copy as text", "Copies the mapping as text (JSON with the model's path) to share: paste it below on another machine.", function()
+	end, 100)
+	local w = check(p, "Draw NM's bodies over the ragdolls in the world", "Each ragdoll with NM near you gets its NM body's capsules drawn where NM has them (superadmins).\n\ndms_rig_view")
+	w:SetConVar("dms_rig_view")
+	local c = row(p)
+	local copy = button(c, "Copy as text", "Copies the rig as text (JSON with the model's path) to share: paste it below on another machine.", function()
 		if sk.text then
 			SetClipboardText(sk.text)
-			notification.AddLegacy("DMS: the mapping is in the clipboard", NOTIFY_GENERIC, 3)
+			notification.AddLegacy("DMS: the rig is in the clipboard", NOTIFY_GENERIC, 3)
 		end
-	end, 110)
+	end)
+	copy:Dock(LEFT)
+	copy:SetWide(130)
 	local ir = row(p, 60)
 	local text = ir:Add("DTextEntry")
 	text:Dock(FILL)
 	text:SetMultiline(true)
-	text:SetPlaceholderText("Paste a mapping's text here (Ctrl+V), then Import")
-	local imp = button(ir, "Import", "Applies the pasted mapping to the model loaded above (made for it or for another model with the same bone names); save it to keep it.", function()
+	text:SetPlaceholderText("Paste a rig's text here (Ctrl+V), then Import")
+	local imp = button(ir, "Import", "Applies the pasted rig to the model loaded above (made for it or for another model with the same bone names); try it or save it to keep it.", function()
 		if not sk.model then return notification.AddLegacy("DMS: load a model first", NOTIFY_ERROR, 3) end
 		request({ kind = "skeleton_import", model = sk.model, text = text:GetValue() })
 	end)
@@ -1187,7 +1393,8 @@ end
 concommand.Add("dms_menu", toggle, nil, "Opens and closes the DMS window")
 DMS_MenuOpen = open
 
--- dms_rig_edit [model]: the window on its Skeletons tab with the model (the one under the crosshair, else the player's).
+-- dms_rig_edit [model] [part]: the window on its Skeletons tab with the model (the one under the crosshair, else the
+-- player's) and a part picked.
 concommand.Add("dms_rig_edit", function(_, _, args)
 	local model = args[1]
 	if not model then
@@ -1197,7 +1404,8 @@ concommand.Add("dms_rig_edit", function(_, _, args)
 	lastTab = "Skeletons"
 	open()
 	skLoad(model)
-end, nil, "The DMS window's mapping editor on a model (default: the one under your crosshair, else yours)")
+	sk.sel = args[2]
+end, nil, "The DMS window's rig editor on a model (default: the one under your crosshair, else yours), a part picked (NM's name)")
 
 -- The catalogue for the DMS tool (its behaviours and weapons): what came last, and a request for it (the hook
 -- DMS_Catalogue runs when it comes; superadmins only).
@@ -1250,13 +1458,19 @@ net.Receive("dms_tuning", function()
 		refresh()
 	elseif r.kind == "skeleton" then
 		local d = r.data
-		sk = { model = d.model, error = d.error, bones = d.bones, class = d.class, saved = d.saved, map = d.map or {},
+		local rig = istable(d.rig) and d.rig or {}
+		local sel = d.model == sk.model and sk.sel or nil
+		sk = { model = d.model, error = d.error, bones = d.bones, class = d.class, saved = d.saved, draft = d.draft,
+			rig = { bones = rig.bones or {}, joints = rig.joints or {}, parts = rig.parts or {} }, sel = sel,
 			preview = d.preview, text = d.text, imported = d.imported, note = d.note }
 		if IsValid(ui.frame) then skFill() end
 	elseif r.kind == "skeleton_fit" then
 		if r.data.model == sk.model then
 			sk.preview, sk.text = r.data.preview, r.data.text
+			if r.data.note then sk.note = r.data.note end
+			if r.data.draft ~= nil then sk.draft = r.data.draft end
 			skStatus()
+			skRefill()
 		end
 	elseif r.kind == "error" then
 		notification.AddLegacy("DMS: " .. tostring(r.data), NOTIFY_ERROR, 4)

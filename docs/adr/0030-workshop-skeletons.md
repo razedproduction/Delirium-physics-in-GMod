@@ -28,12 +28,25 @@ and sometimes a bind pose that disagrees with the bones' default transforms. Two
 2. **NM's Spine1–3 are never mapped**: spread between the spine and the neck in Homer's proportions (0025). The rig's
    bones between them are posed from the part whose span they're in (three bones: one each, as ValveBiped's Spine1,
    Spine2, Spine4 were).
-3. **The mapping editor** (the DMS window's Skeletons tab, `dms_rig_edit`): a bone per NM joint from the model's bones;
-   the model drawn in its own pose (the mesh's bind, from the `.mdl`) with the fitted capsules and joints over it,
-   refitted on the server (`DMS.FitPreview`) as a bone changes. Mappings are kept on the server in
-   `data/dms/skeletons/<model path without models/ and .mdl>.json` (`{dms_skeleton = 1, model, checksum, bones = {[NM
-   part] = bone}}`), copied as that text and pasted on another machine (a mapping names bones, so it also fits another
-   model with the same names). A saved mapping wins over the rig's own; deleting it goes back.
+3. **The rig editor** (the DMS window's Skeletons tab, `dms_rig_edit [model] [part]`), because `Build::fit` on the
+   bones alone doesn't always fit a model well (the user's request): per NM part
+   - its **bone** (NM's Spine1–3 stay spread, 2);
+   - its **joint moved** from where the bone puts it (units, the model's space): the fit's input, as the spine's spread;
+   - its **size** (a capsule's radius and half length, a box's half extents) and **mass** set on the fitted build (the
+     inertia scaled as the shape's own moments are; the mass through the part's `heft`, so NM weighs it so);
+   - how it **lies on the model's bone** (moved in the part's frame, turned): only how the model is posed from the part
+     and drawn over it, NM's body untouched (a head or a hand that sits crooked on its capsule).
+   The model is drawn in its own pose (the mesh's bind, from the `.mdl`, the bones it's skinned to at LOD 0) with the
+   fitted capsules and joints over it, refitted on the server (`DMS.FitPreview`) as anything changes; a joint is
+   dragged with the right mouse button. **Try it in the world** puts NM again on the model's ragdolls with the rig (a
+   new one if there's none) without saving it, their NM bodies drawn over them (`dms_rig_view`, the fork's parts 15
+   times a second, `DMS.RagdollParts`/`DMS.RagdollShapes`). Rigs are kept on the server in
+   `data/dms/skeletons/<model path without models/ and .mdl>.json` (`{dms_skeleton = 2, model, checksum, bones = {[NM
+   part] = bone}, joints = {[part] = {x, y, z}}, parts = {[part] = {radius, half, box, mass, offset, turn}}}`; format 1,
+   bones only, still reads), copied as that text and pasted on another machine (a rig names bones, so it also fits
+   another model with the same names). A tried rig wins over the saved one, the saved one over the model's own.
+   Sizes and masses make this model's NM body, not Homer's, and nobody's by default: ADR 0008 holds for Homer and every
+   golden run, and a body edited far from its fit behaves as its edits make it (a knee moved 10 cm up on one side falls).
 4. **Physics bones that are no joint** (hair, coats) are posed from their nearest posed ancestor's part, rigidly as in
    the bind pose; the bones the client finishes are the parts' own bones without an object of their own, each in the
    frame of its nearest ancestor with one (sent as `DMS_Finish`, at most 16).

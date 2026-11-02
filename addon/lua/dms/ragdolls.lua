@@ -49,12 +49,13 @@ function DMS_WhyNotMapped(ent)
 	return c.why ~= "" and c.why or (ent:GetModel() .. ": can't be fitted")
 end
 
--- Homer's build fitted to the model by its rig or saved mapping (kept by the module): its fit, or nil and why.
+-- Homer's build fitted to the model by its rig, or the player's (saved, or being tried: skeletons.lua), kept by the
+-- module: its fit, or nil and why.
 function DMS_RagdollFit(model)
 	if not loadData() then return nil, "NM's data isn't loaded" end
 	local bytes, why = DMS_ModelBytes(model)
 	if not bytes then return nil, why end
-	local ok, f = pcall(DMS.RagdollFit, model, bytes, DMS_SkeletonSaved(model))
+	local ok, f = pcall(DMS.RagdollFit, model, bytes, DMS_RigArgs(DMS_ModelRig(model)))
 	if not ok then return nil, tostring(f) end
 	return f
 end

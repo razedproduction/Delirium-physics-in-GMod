@@ -641,8 +641,9 @@ steps as the Playroom's, the wander's COM apart (1.86 m).
 mapping made on one machine imports on another.
 
 **So far (ADR 0030, proposed):** a skeleton's class by its rig (ValveBiped, Biped, Mixamo, Unreal, TF2, VRoid, MMD), a
-guess by its bones' names and hierarchy, or the player's mapping (the Skeletons tab, `dms_rig_edit`), checked before
-it's fitted; physics bones that are no joint carried by their nearest posed ancestor's part; the client's finishing per
+guess by its bones' names and hierarchy, or the player's rig made in the editor (the Skeletons tab, `dms_rig_edit`: a
+bone per joint, joints moved, parts' sizes, masses and placement on the model, tried on the ragdolls in the world with
+their NM bodies drawn over them, `dms_rig_view`), checked before it's fitted; physics bones that are no joint carried by their nearest posed ancestor's part; the client's finishing per
 model; a broken bind pose fitted to the mesh's bind and reported; a model's first use prepared in the background with a
 message. On the bench: HL2's models and the mounted Workshop ValveBiped ones (Terminator's arnold and t800nw, EFT's bear
 and usec) map as ValveBiped and `golden body --fit` holds (within 1e-5 of the SDK's `nm_build_fit`); `zombie/classic`
