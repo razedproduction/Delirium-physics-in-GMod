@@ -10,7 +10,7 @@ cargo build --release -p dms-homer
 .\target\release\dms-homer.exe --game "D:\Games\Grand Theft Auto IV"
 ```
 
-(From a release: `install.ps1 -Model -Gta "<GTA IV folder>"`, docs/install.md.) `--game` can be left out when
+(From a release: `install.bat`, "Make Homer's model only", docs/install.md.) `--game` can be left out when
 `DMS_GAME_DIR` is set, or `garrysmod\data\dms\game_dir.txt` or the repository's `golden\game_dir.txt` exists; Garry's
 Mod is found through Steam (or `--gmod <GarrysMod folder>`). What it does:
 
