@@ -148,16 +148,34 @@ the Playroom's agent in FOLLOW, stepped from the environment's step callback (1/
 steps), its drives, armature, balancer impulses and gravity's compensation on the bodies, all of it the module's own
 code (`dms_vphysics::follow`), with the Playroom's balance button pressed (`bodyBalance start=true`). *Push* is the
 Playroom's poke: an impulse into the spine (part 9) away from the view, 8 N s by default; dragging a part is the
-Playroom's grab. The panel shows whether he's balancing or fallen, NM's messages and feedback, and why NM came off
-(a blow-up or a state that isn't finite). The Playroom room's reactions round the agent (its tasks, get-ups,
-`in_air`, the additional reactions) are the module's and aren't in the editor.
+Playroom's grab. The panel shows whether he's balancing or fallen, his health and the shot task, NM's messages and
+feedback, and why NM came off (a blow-up or a state that isn't finite).
 
-`--snap-report <models> --sim 600 --nm balance [--push <N s>]` does it for each model: stood under bodyBalance,
-pushed halfway (8 N s by default), and the same build in LEAD (NM's own physics) for comparison; `homer` among the
-texts adds Homer's own body. A fault is a pelvis below 0.8 of its standing height (or NM coming off). With 600 steps
-and a 40 N s push: Homer and `humans/group01/male_07` stand and take it (male_07 steps 0.43 m); `kleiner`, `alyx` and
-`combine_soldier` go down after 1.2–2.1 s though they stand in LEAD (a difference of the fork's physics from NM's on
-those bodies, the fork's to fix); every plain fit goes down.
+Under NM ([ADR 0033](adr/0033-room-shot-shared.md)):
+
+- **Shoot** is the room's shot, the game's bullets' (the Playroom's `shot` button; *from behind*: its `shot back`):
+  the weapon's damage on his health (weaponinfo.xml's, from your GTA IV), the limb's injury mask, the bullet's
+  impulse and the ShotTask with the weapon's taskparams set, then its messages every other step; at health 0 he goes
+  limp (`STOP all`, `relax`). Pick the weapon (the Playroom's: pistol, ak47, shotgun, ...) and the part (Spine2 by
+  default). It's the module's code (`dms_vphysics::follow::shot`).
+- The Playroom's **buttons** that only send messages (`balance`, `windmill`, `pedal`, `writhe`, `rollup`,
+  `catchfall`, `highfall`, `stairs`, `relax`, `stayup`, `foetal`, `STOP all`) and a **message line**: any of NM's
+  messages as the Playroom's console takes it (`<message> [param=value ...]`, e.g. `bodyBalance start=true` or
+  `armsWindmill start=true`), sent with Enter or *Send* (Up brings the last line back). A wrong line is reported in
+  the panel with the console's words; the tuning profile is off, as in the Playroom (ADR 0009).
+
+The rest of the room's reactions (its tasks, get-ups, `in_air`, the additional reactions, blasts, fire, the taser,
+cars) are the module's and aren't in the editor.
+
+`--snap-report <models> --sim 600 --nm balance [--push <N s> | --shoot <weapon>]` does it for each model: stood under
+bodyBalance, pushed (8 N s by default) or shot in the chest from the front halfway, and the same build in LEAD (NM's
+own physics, the same blow) for comparison; `homer` among the texts adds Homer's own body. A fault is a pelvis below
+0.8 of its standing height (or NM coming off). With 600 steps and a 40 N s push: Homer and `humans/group01/male_07`
+stand and take it (male_07 steps 0.44 m); `kleiner`, `alyx` and `combine_soldier` go down after 1.2–2.1 s though they
+stand in LEAD (a difference of the fork's physics from NM's on those bodies, the fork's to fix); every plain fit goes
+down. Shot with the pistol, Homer staggers 1.8 m and stays up (health 175, as in LEAD: the pelvis at 0.887 m in both),
+with the AK47 2.05 m; `humans/group01/male_07` goes down 3.2 s in, though it stands in LEAD, and
+`player/group01/male_07` stays up.
 
 ## For scripts
 
@@ -165,6 +183,7 @@ those bodies, the fork's to fix); every plain fit goes down.
 `--bones <model>` its bones; `--select <part>` and `--tool <name>` set the view up (with a screenshot, the view frames
 the selected part), `--yaw <degrees>` turns it round the model, `--snap` snaps all the parts at once;
 `--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many physics steps) and quits; with
-`--nm balance` the body is stood under NM's bodyBalance instead of dropped, `--push <N s>` pokes it halfway, and
+`--nm balance` the body is stood under NM's bodyBalance instead of dropped, `--push <N s>` pokes it halfway (or
+`--shoot <weapon>` shoots it), and
 `--homer` simulates Homer's own body;
 `--snap-report` scores Snap ([Snap](#snap)).

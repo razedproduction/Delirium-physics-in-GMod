@@ -189,6 +189,11 @@ pub struct App {
     sim_homer: bool,
     /// The push under NM (N s, the Playroom's poke by default).
     push: f32,
+    /// The room's shot under NM: the part, the weapon, from behind.
+    shot_at: sim::ShotAt,
+    /// The message line being typed, and the lines sent (the newest last).
+    nm_line: String,
+    nm_sent: Vec<String>,
     paste: String,
     import: String,
     shot: Option<(PathBuf, u64)>,
@@ -337,6 +342,9 @@ impl App {
             sim_err: None,
             sim_homer,
             push: dms_vphysics::follow::POKE,
+            shot_at: sim::ShotAt::default(),
+            nm_line: String::new(),
+            nm_sent: vec![],
             paste: String::new(),
             import: String::new(),
             shot,
@@ -610,7 +618,7 @@ impl App {
         if !s.has_body() {
             return;
         }
-        if let Err(e) = s.nm_on(&build, button) {
+        if let Err(e) = s.nm_on(&build, &self.homer.data, button) {
             self.sim_err = Some(e);
         }
     }
@@ -1447,6 +1455,59 @@ impl App {
         }
     }
 
+    /// Under NM: the room's shot, the Playroom's buttons and a message line, as the game sends them.
+    fn nm_ui(&mut self, ui: &mut egui::Ui) {
+        use dms_vphysics::follow::shot::WEAPONS;
+        let parts = delirium_data::nm_asset::PARTS;
+        ui.horizontal_wrapped(|ui| {
+            let shoot = ui.button("Shoot").on_hover_text("the room's shot (the Playroom's shot button): the weapon's damage on his health, its impulse and the ShotTask with its taskparams set, as the game's bullets").clicked();
+            ui.checkbox(&mut self.shot_at.back, "from behind");
+            egui::ComboBox::from_id_salt("weapon").selected_text(WEAPONS[self.shot_at.weapon].0).show_ui(ui, |ui| {
+                for (i, w) in WEAPONS.iter().enumerate() {
+                    ui.selectable_value(&mut self.shot_at.weapon, i, w.0);
+                }
+            });
+            egui::ComboBox::from_id_salt("shot part").selected_text(parts.get(self.shot_at.part).copied().unwrap_or("?")).show_ui(ui, |ui| {
+                for (k, p) in parts.iter().enumerate().take(dms_vphysics::follow::PARTS) {
+                    ui.selectable_value(&mut self.shot_at.part, k, *p);
+                }
+            });
+            if shoot && let Some(s) = &mut self.sim {
+                s.shoot(self.shot_at);
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for b in ["balance", "windmill", "pedal", "writhe", "rollup", "catchfall", "highfall", "stairs", "relax", "stayup", "foetal", "STOP all"] {
+                let lines = dms_vphysics::follow::button_lines(b).unwrap_or_default().join("; ");
+                if ui.small_button(b).on_hover_text(format!("the Playroom's button: {lines}")).clicked()
+                    && let Some(s) = &mut self.sim
+                {
+                    s.send(b);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut self.nm_line).hint_text("bodyBalance start=true  (message param=value ...)").desired_width(ui.available_width() - 60.0));
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // Up: the last line sent again.
+            if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && let Some(l) = self.nm_sent.last() {
+                self.nm_line = l.clone();
+            }
+            if (ui.button("Send").clicked() || enter) && !self.nm_line.trim().is_empty() {
+                let line = self.nm_line.trim().to_string();
+                if let Some(s) = &mut self.sim {
+                    s.send(&line);
+                }
+                self.nm_sent.retain(|l| l != &line);
+                self.nm_sent.push(line);
+                self.nm_line.clear();
+                if enter {
+                    edit.request_focus();
+                }
+            }
+        });
+    }
+
     fn sim_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Simulation on the fork");
         ui.label("The fitted body made by VPhysics-Box3D as the module makes it (IPhysicsNM: CreateBody, CreateJoint, the bind, NM's collision pairs); NM on it as the module's agents drive one.");
@@ -1478,6 +1539,8 @@ impl App {
                 s.nm_off();
             }
         });
+        let on = self.sim.as_ref().is_some_and(|s| s.with_nm(|_| ()).is_some());
+        ui.add_enabled_ui(on, |ui| self.nm_ui(ui));
         if let Some(s) = &self.sim {
             s.with_nm(|a| {
                 let state = match &a.failed {
@@ -1487,6 +1550,8 @@ impl App {
                     None => "not balancing".into(),
                 };
                 ui.label(format!("{}: {state}; {} NM steps, {:.2} ms a step", a.button, a.steps, a.cost));
+                let shot = if a.shots.task() { ", the shot task running" } else { "" };
+                ui.label(format!("health {:.0}{}{shot}", a.shots.health, if a.shots.dead { " (dead: limp)" } else { "" }));
                 for l in &a.log {
                     ui.label(egui::RichText::new(l).weak().small());
                 }
@@ -1603,8 +1668,12 @@ impl eframe::App for App {
             if want > 0 {
                 let dir = (self.cam.target - self.cam.eye()).with_z(0.0).normalize_or(Vec3::Y);
                 while s.steps < want {
-                    if let Some(push) = self.opts.push.filter(|_| s.steps == want / 2) {
-                        s.poke(dms_vphysics::follow::POKE_PART, dir, push);
+                    if s.steps == want / 2 {
+                        if let Some(weapon) = self.opts.shoot {
+                            s.shoot(sim::ShotAt { weapon, ..Default::default() });
+                        } else if let Some(push) = self.opts.push {
+                            s.poke(dms_vphysics::follow::POKE_PART, dir, push);
+                        }
                     }
                     s.run(sim::TIMESTEP);
                     if s.paused || !s.has_body() {

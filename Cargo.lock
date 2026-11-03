@@ -824,6 +824,7 @@ name = "dms-rig"
 version = "0.1.0"
 dependencies = [
  "delirium",
+ "delirium-data",
  "delirium-sdk",
  "dms-fit",
  "dms-game",
@@ -839,6 +840,7 @@ name = "dms-vphysics"
 version = "0.1.0"
 dependencies = [
  "delirium",
+ "delirium-data",
  "dms-game",
  "dms-homer",
 ]
