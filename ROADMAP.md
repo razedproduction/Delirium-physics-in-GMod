@@ -554,6 +554,17 @@ constraints, within 7 mm), the 6 bones without objects finished on the client. P
       Homer — its reference its own LEAD on the crate (`golden fit`, there), the Playroom can't load a fitted build (M9).
       `stand` and `catchfall` within them; `push` (COM mean 0.061 m, tolerance 0.05) and `shot` (0.378 m, 0.25) off:
       it steps away further than its LEAD (Homer: 0.020, 0.148), never falls, ends as high.
+      → The bench, 2026-11-03 (`golden fit`, the fork `VBOX3D_NM_006`): `stand`, `catchfall`, `shot` (COM mean 0.213 m,
+      tolerance 0.25), `stand-1s` (COM max 0.060 m, 0.08) within them; only `push` off: COM mean 0.0615–0.0621 m
+      over 3 runs (tolerance 0.05), max 0.079 (0.10), no fall, the end height 0.956 m against 0.963. The gap is made
+      **before** the poke (at 2.00 s): 0.057 m at 1.00 s, the poke adds ~0 (LEAD's COM goes 2.5 cm in the 6 s after
+      it, FOLLOW's 0.3 cm). It's Homer's stance divergence (ADR 0019), on a body that settles further: in the first
+      0.25 s FOLLOW's COM dips to 0.943 m against LEAD's 0.964 and takes its first step elsewhere (x +0.029 against
+      −0.013 at 0.75 s); standing, the COM is 6–7 mm lower (0.949 against 0.955), the feet's deepest contact
+      −12…−14 mm against NM's −7 (tilted feet), the joints' pivots apart up to 6 mm; and NM's own physics creeps on
+      the floor (LEAD ~2 mm/s while "still", then steps at ~30 s of `stand`, 0.58 m away at its end, as the
+      Playroom's Homer does at ~40 s; Box3D's friction holds the feet). Homer's
+      `push` has the same parts, smaller: 0.027 m at 1.00 s. What's left is M4/M5's stance item (the fork's joints).
 - [x] The body check (`golden body`) on the fitted body (moved to M11; done there: `golden body --fit`).
 - [x] The DMS window: "NM on the ragdoll under the crosshair" works on any model, the model's fit shown (height, mass,
       warnings).
