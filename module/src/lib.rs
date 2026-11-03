@@ -13,7 +13,6 @@ mod lua;
 mod natives;
 mod nm;
 mod nm_natives;
-mod ragdolls;
 mod react;
 mod selftest;
 mod step;
@@ -50,7 +49,7 @@ fn acquire_message() -> String {
     match vphysics_nm::acquire() {
         Ok(Version::V006) => format!("[DMS] IPhysicsNM {} found", Version::V006.name()),
         Ok(v @ (Version::V005 | Version::V004)) => {
-            format!("[DMS] IPhysicsNM {} found (Homer only: GMod's ragdolls need {}, update VPhysics-Box3D)", v.name(), Version::V006.name())
+            format!("[DMS] IPhysicsNM {} found", v.name())
         }
         Ok(Version::V003) => format!(
             "[DMS] WARNING: only IPhysicsNM {} found, NM's contact materials (SetBodyMaterial, SetSurfaceMaterial) are \
@@ -91,7 +90,7 @@ unsafe fn open(l: *mut LuaState) -> c_int {
     let Ok(api) = lua::api() else { return 0 };
     let nm_message = acquire_message();
     unsafe {
-        let natives = natives::NATIVES.iter().chain(nm_natives::NATIVES).chain(bind::NATIVES).chain(agents::NATIVES).chain(dev::NATIVES).chain(world::NATIVES).chain(react::NATIVES).chain(ragdolls::NATIVES);
+        let natives = natives::NATIVES.iter().chain(nm_natives::NATIVES).chain(bind::NATIVES).chain(agents::NATIVES).chain(dev::NATIVES).chain(world::NATIVES).chain(react::NATIVES);
         (api.createtable)(l, 0, 4 + natives.clone().count() as c_int);
         let version = CString::new(MODULE_VERSION).unwrap_or_default();
         (api.pushstring)(l, version.as_ptr());
@@ -129,7 +128,6 @@ pub unsafe extern "C" fn gmod13_close(l: *mut LuaState) -> c_int {
     // a map with agents (NM's data, the map read, its worlds).
     let _ = std::panic::catch_unwind(|| {
         data::unload();
-        ragdolls::unload();
         world::unload();
         tuning::unload();
         *delirium::ragdoll::SURFACES.write().unwrap_or_else(|e| e.into_inner()) = Vec::new();

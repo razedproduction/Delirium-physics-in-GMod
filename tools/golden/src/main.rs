@@ -24,17 +24,9 @@ usage: golden [--game <GTA IV dir>] [--sdk <SDK dir>] <command>
                Homer's body as dms-homer ports it (ROADMAP M3): the build against the Playroom's NM_DUMP and the
                SDK (1e-5), the compiled homer.phy against the build, and on the bench (unless --no-game) Homer
                spawned and bound against NM's body (frames 1 mm / 0.5 deg, masses, inertia 1 %), then dropped
-  body --fit [<mdl>]
-               a body fitted to a GMod model (ROADMAP M11; default male_07): its build against the SDK on its own dump,
-               then on the bench its native body (no NM) against it as Homer's is, then dropped
   behaviour --source [names]
                the scenarios on the bench server (dms-ctl run) -> golden/out/source/<name>.rec, against the
                Playroom's golden/out/<name>.rec: COM, speed, lowest parts, command steps
-  fit [--model <mdl>] [names]
-               a body fitted to a GMod model (ROADMAP M10; default male_07; stand, push, shot, catchfall unless named)
-               on the bench in FOLLOW on its native body, against the same build in LEAD (the crate as the Playroom
-               runs it: the Playroom can't load a fitted build) -> golden/out/fit/<model>/<name>.{lead,follow}.rec,
-               held to the scenario's `#! tol` as Homer is to the Playroom
 The game's folder: --game (remembered in golden/game_dir.txt), or the DMS_GAME_DIR environment variable.";
 
 struct Ctx {
@@ -117,7 +109,6 @@ fn main() {
         "run" => run(&ctx, &args),
         "behaviour" => behaviour(&ctx, &args),
         "body" => body_check(&ctx, &args),
-        "fit" => fit(&ctx, &args),
         "all" => build(&ctx).and_then(|_| dump(&ctx)).and_then(|_| links(&ctx)).and_then(|_| lead(&ctx)).and_then(|_| run(&ctx, &[])),
         _ => Err(USAGE.into()),
     };
@@ -421,70 +412,6 @@ fn behaviour(ctx: &Ctx, args: &[String]) -> Result<(), String> {
     if failed.is_empty() { Ok(()) } else { Err(format!("differ from the Playroom: {}", failed.join(", "))) }
 }
 
-/// ROADMAP M10: a fitted body's golden. The reference is its own build in LEAD on the bench (NM's own physics, the
-/// room's reactions and the scenario as the Playroom's code runs them), since the Playroom's `<build.txt>` can't carry
-/// a fitted build (ADR 0025); FOLLOW on its native body is held to it by the scenario's tolerances. A window
-/// scenario's commands go at the steps the Playroom's own record (Homer's) has them.
-fn fit(ctx: &Ctx, args: &[String]) -> Result<(), String> {
-    let mut names: Vec<String> = args.to_vec();
-    let model = names.iter().position(|a| a == "--model").map(|i| {
-        let m = names.get(i + 1).cloned().unwrap_or_default();
-        names.drain(i..(i + 2).min(names.len()));
-        m
-    });
-    let model = model.unwrap_or_else(|| "models/humans/group01/male_07.mdl".into());
-    if names.is_empty() {
-        names = ["stand", "push", "shot", "catchfall"].map(String::from).to_vec();
-    }
-    let bench = dms_ctl::Bench::load()?;
-    let mut channel = dms_ctl::Channel::bench(&bench)?;
-    let short = Path::new(&model).file_stem().unwrap_or_default().to_string_lossy().into_owned();
-    let out = ctx.out.join("fit").join(&short);
-    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let mut failed = vec![];
-    for path in scenarios(ctx, &names)? {
-        let mut s = dms_ctl::Scenario::read(&path)?;
-        s.mode = format!("{} fit={model}", s.mode);
-        let theirs = ctx.out.join(format!("{}.rec", s.name));
-        let reference = theirs.is_file().then(|| read_text(&theirs).map(|t| dms_ctl::rec::parse(&t))).transpose()?;
-        let mut recs = vec![];
-        for lead in [true, false] {
-            println!("golden: {} on {short}: {} (about {:.0} s)...", s.name, if lead { "LEAD (the reference)" } else { "FOLLOW on its native body" }, s.seconds());
-            match dms_ctl::run(&mut channel, &s, reference.as_ref(), lead) {
-                Ok(r) => {
-                    write(&out.join(format!("{}.{}.rec", s.name, if lead { "lead" } else { "follow" })), &r)?;
-                    recs.push(r);
-                }
-                Err(e) => {
-                    println!("golden: {}: FAILED on the bench: {e}", s.name);
-                    break;
-                }
-            }
-        }
-        let [lead, follow] = &recs[..] else {
-            failed.push(s.name);
-            continue;
-        };
-        let (theirs, ours) = (dms_ctl::rec::parse(lead), dms_ctl::rec::parse(follow));
-        let d = dms_ctl::rec::compare(&ours, &theirs, REC_TOLERANCE);
-        let checks = tolerances(&s.tol, &ours, &theirs);
-        for (what, ok, detail) in &checks {
-            println!("golden: {}: {} {what}: {detail}", s.name, if *ok { "ok  " } else { "OFF " });
-        }
-        println!("golden: {}: {} steps (LEAD {}); COM gap max {:.4} m at step {}, mean {:.4} m; |v| gap max {:.3} m/s",
-            s.name, d.steps, d.theirs_steps, d.com_max.0, d.com_max.1 + 1, d.com_mean, d.speed_max);
-        for l in follow.lines().chain(lead.lines()).filter(|l| l.starts_with("# dms:")) {
-            println!("golden: {}: {l}", s.name);
-        }
-        if d.steps == d.theirs_steps && !checks.is_empty() && checks.iter().all(|c| c.1) {
-            println!("golden: {}: OK, FOLLOW on {short} within the scenario's tolerances of its LEAD", s.name);
-        } else {
-            failed.push(s.name);
-        }
-    }
-    if failed.is_empty() { Ok(()) } else { Err(format!("{short} in FOLLOW differs from its LEAD: {}", failed.join(", "))) }
-}
-
 /// The checks of a scenario's `#! tol` line on Homer's record against the Playroom's: `(check, held, what was
 /// measured)`. A physics engine that isn't the Playroom's can't keep its record to the millimetre: the checks hold
 /// what the behaviour is (golden/README.md).
@@ -610,22 +537,6 @@ fn run_one(ctx: &Ctx, path: &Path, name: &str) -> Result<String, String> {
 
 /// `golden body`: the three steps of `body.rs`; the game's only if the bench is up (or `--no-game`).
 fn body_check(ctx: &Ctx, args: &[String]) -> Result<(), String> {
-    if let Some(i) = args.iter().position(|a| a == "--fit") {
-        let model = args.get(i + 1).filter(|m| !m.starts_with("--")).cloned().unwrap_or_else(|| "models/humans/group01/male_07.mdl".into());
-        let theirs = ctx.out.join("homer.nmdump");
-        if !theirs.is_file() {
-            dump(ctx)?;
-        }
-        // fred.xrt into the SDK first (Homer's body and pairs, its masses).
-        ours(ctx)?;
-        let (b, frames) = dms_game::Game::open(ctx.game()?)?.homer()?;
-        return if body::fitted(&model, (&b, &frames), &read_text(&theirs)?)? {
-            println!("golden: body --fit {model} OK");
-            Ok(())
-        } else {
-            Err(format!("body --fit {model}: off"))
-        };
-    }
     let gmod = args.iter().position(|a| a == "--gmod").and_then(|i| args.get(i + 1)).map(PathBuf::from)
         .or_else(|| std::env::var_os("DMS_GMOD_DIR").map(PathBuf::from)).or_else(dms_homer::steam_gmod)
         .ok_or("Garry's Mod not found: pass --gmod <GarrysMod folder>")?;

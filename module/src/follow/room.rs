@@ -1111,12 +1111,6 @@ impl Follower {
             let slow = e.speed.filter(|_| !e.fail || self.room.failed).is_some_and(|s| v < s);
             if (t >= e.min && slow) || (t >= e.max && v < 2.0) {
                 self.room.nm_t = None;
-                // A fitted body has no clips of its own (Homer's don't fit it): it stays in NM (ROADMAP M10).
-                if self.def.fitted {
-                    self.say(&format!("ours  game task: out of NM after {t:.2} s; a fitted body stays in NM (no get-up clips)"));
-                    self.room.last = pelvis;
-                    return;
-                }
                 self.say(&format!("ours  game task: out of NM after {t:.2} s at {v:.2} m/s: {}", if lying { "getting up" } else { "back to the animation" }));
                 self.room.rise = Some(if lying { clips.start(now) } else { clips.stand(now) });
                 self.freeze = true;
@@ -1124,9 +1118,7 @@ impl Follower {
             self.room.last = pelvis;
             return;
         }
-        // A fitted body doesn't get up by Homer's clips: with the animation's mode it stays down (ROADMAP M10, the
-        // user's choice); the muscles' get-up takes the clip's poses as targets only, and runs.
-        let getup = if self.def.fitted && self.room.set.getup == 0 { 2 } else { self.room.set.getup };
+        let getup = self.room.set.getup;
         let down = getup != 2
             && !self.room.set.tasks
             && self.room.health >= 50.0

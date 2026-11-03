@@ -2,8 +2,8 @@
 
 DMS puts Delirium, an active ragdoll in the NaturalMotion style, into Garry's Mod: Homer, a ragdoll whose muscles
 keep him standing, so he balances, stumbles, braces and falls on his own and reacts to shots, blasts, fire and blows
-as he does in the Delirium Playroom. GMod's own humanoid ragdolls (HL2's citizens, combine, Workshop player models)
-can be put under NM too.
+as he does in the Delirium Playroom. DMS is Homer only (docs/adr/0036); NM on GMod's own humanoid ragdolls, NPCs and
+Workshop models is a separate project, `Delirium-ragdolls-in-GMod`.
 
 DMS comes in two parts:
 

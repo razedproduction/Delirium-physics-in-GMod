@@ -126,7 +126,7 @@ impl NativeBody {
         }
         let mut made = NativeBody { objects: vec![], joints: vec![std::ptr::null_mut(); body.parts.len()] };
         for (p, s) in body.parts.iter().zip(states) {
-            let points: Vec<[f32; 3]> = dms_homer::hull::points(&p.shape).iter().map(|v| v.to_array()).collect();
+            let points: Vec<[f32; 3]> = crate::hull::points(&p.shape).iter().map(|v| v.to_array()).collect();
             // SAFETY: the caller's.
             let o = unsafe { nm.create_body(env, owner, &points, p.mass, &s.pos.to_array(), &s.rot.to_array(), game_flags) }.unwrap_or(std::ptr::null_mut());
             if o.is_null() {

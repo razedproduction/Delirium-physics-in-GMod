@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 dms-game = { path = "../dms-game" }
+# The hulls as the fork grows them and the `.phy` reader (docs/adr/0036).
+dms-vphysics = { path = "../dms-vphysics" }
 # Read only (docs/adr/0001): built into this workspace's target/, nothing is written there.
 delirium = { path = "../../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium" }
 delirium-data = { path = "../../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-data" }

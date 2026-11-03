@@ -5,6 +5,10 @@ ordinary `prop_ragdoll` on the [VPhysics-Box3D](vphysics/) physics (a fork with 
 every physics step Delirium returns forces and torques for its parts. Homer balances, stumbles, braces and falls on
 his own, and reacts to shots, blasts, fire and blows exactly as he does in the Delirium Playroom.
 
+This repository is the golden project: **Homer only**, held to the Playroom one to one. NM on GMod's own ragdolls,
+NPCs and Workshop models (and the rig editor) is a separate project, `Delirium-ragdolls-in-GMod`, built on this one's
+core ([ADR 0036](docs/adr/0036-project-split.md)).
+
 > The project is developed with [Claude Code](https://claude.com/claude-code).
 
 ## Playing
