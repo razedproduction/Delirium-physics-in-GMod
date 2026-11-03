@@ -1696,6 +1696,13 @@ void CPhysicsObject::ApplyDrive( b3Vec3 force, b3Vec3 torque )
 	Wake();
 	b3Body_ApplyForceToCenter( m_Body, force, true );
 	b3Body_ApplyTorque( m_Body, torque, true );
+	m_nNMDriveStep = m_pEnvironment->GetStepCount();
+}
+
+bool CPhysicsObject::IsNMDriveCurrent() const
+{
+	// The drives come in the NM step callback, after the step's buoyancy is prepared: the last step's count it.
+	return m_nNMDriveStep != UINT32_MAX && m_pEnvironment->GetStepCount() - m_nNMDriveStep <= 1;
 }
 
 void CPhysicsObject::CalculateForceOffset( const Vector &forceVector, const Vector &worldPosition, Vector *centerForce, AngularImpulse *centerTorque ) const

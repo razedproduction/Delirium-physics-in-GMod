@@ -135,3 +135,12 @@ its index, and `ShouldCollide`, `IsCollisionAllowed` and `EvaluateCollision` tak
 bodies (fred.xrt's self-collision pairs) before asking the game. `SetBodyState` teleports a body to a state (centre of
 mass, rotation, velocities, SI) through `SetPositionMatrix` and `SetVelocityInstantaneous`. `CreateBody` keeps each
 hull by its points' bytes (up to 4096) and reuses it; `DestroyBody` leaves a kept hull.
+
+## Water through NM only (ADR 0033, the interface unchanged)
+
+The Playroom's pool acts on its doll only through NM's `buoyancy` message; Source's water (`CPhysicsFluidController`,
+`CBuoyancyController`) floated an NM body as well: Homer standing on gm_construct's 2 m deep pool bottom came up to
+0.03 m under the surface without any message, and with `buoyancy` both pushed him. `CPhysicsObject::ApplyDrive` stamps
+the step (`m_nNMDriveStep`); `CBuoyancyController::Prepare` doesn't simulate a body NM drove this step or the last
+(`IsNMDriveCurrent`: the drives come in the step callback, after the step's buoyancy is prepared). A body NM has let go
+of (a detached Homer, a parked agent) floats again from its next step.

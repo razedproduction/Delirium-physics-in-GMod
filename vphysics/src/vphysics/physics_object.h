@@ -334,6 +334,9 @@ public:
 	// IPhysicsNM::SetBodyMaterial: the shapes take NM's friction and elasticity, tagged for the mixing callbacks
 	void SetNMMaterial( float flFriction, float flElasticity );
 	bool IsNMDriven() const { return m_bNMDriven; }
+	// NM drove the body (ApplyDrive) this step or the last: water acts on it only through NM's buoyancy, as on the
+	// Playroom's doll, not through the fluid controllers
+	bool IsNMDriveCurrent() const;
 
 	// IPhysicsNM::SetBodyCollisionPairs: the set the body is in and its index there (null for none)
 	void SetNMCollisionSet( std::shared_ptr<const NMCollisionSet_t> pSet, int nIndex ) { m_pNMCollisionSet = std::move( pSet ); m_nNMCollisionIndex = nIndex; }
@@ -500,6 +503,7 @@ private:
 	b3Vec3 m_NMStartVelocity = b3Vec3_zero;
 	b3Vec3 m_NMStartAngularVelocity = b3Vec3_zero;
 	uint32_t m_nNMStartStep = UINT32_MAX;
+	uint32_t m_nNMDriveStep = UINT32_MAX;
 	b3Vec3 m_ImpactVelocity = b3Vec3_zero;
 	b3Vec3 m_ImpactAngularVelocity = b3Vec3_zero;
 	float m_flFastDistance = 0.0f;
