@@ -1,0 +1,6 @@
+{
+	"title": "Delirium Playroom in Garry's Mod",
+	"type": "entity",
+	"tags": ["fun", "realism"],
+	"ignore": ["*.md", "*.txt", "*.psd", "*.svn", "*.git*"]
+}
