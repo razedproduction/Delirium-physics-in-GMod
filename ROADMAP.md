@@ -247,7 +247,7 @@ boxes; the look is the Playroom's (NM's capsules and boxes, without GTA IV's mes
       ellipse of leans in the parent's frame, the Box3D patch `box3d-elliptical-cone.patch`; it was twist/cone/plane
       with a heuristic axis and X/Y mixed up, the hip went ~15° past). `golden body` passes: the tensor 7e-8, joints in a
       fall ≤ 0.5° past NM's limits, pivots ≤ 0.6 mm.
-- [ ] The user's visual check (docs/homer.md: the look, `vcollide_wireframe 1`, a fall).
+- [x] The user's visual check (docs/homer.md: the look, `vcollide_wireframe 1`, a fall): passed (2026-11-03).
 
 **DoD:** `dms-homer` makes `homer.mdl` from the copy of GTA IV in one command; `tools/golden body` passes: the build
 matches the Playroom's (1e-5), a spawned Homer has all 21 parts matching the Playroom (position ≤ 1 mm, rotation ≤ 0.5°,
