@@ -4,7 +4,7 @@
 
 DMS (the `gmsv_dms_win64.dll` module, the Lua addon, `dms-homer` and the other tools in this repository) is licensed
 under the **GNU General Public License version 3 only** (GPL-3.0-only), see [LICENSE](LICENSE). The source of every
-release is the repository's tag of that version: https://github.com/razedproduction/DMS-in-Gmod.
+release is the repository's tag of that version: https://github.com/razedproduction/Delirium-physics-in-GMod.
 
 ## Delirium
 

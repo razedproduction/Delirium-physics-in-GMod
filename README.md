@@ -11,7 +11,7 @@ his own, and reacts to shots, blasts, fire and blows exactly as he does in the D
 
 You need Garry's Mod's **stable branch** launched in x64 on Windows and **your own copy of GTA IV** (PC or Xbox 360): Homer's body
 and NM's data are read from it, nothing of the game is shipped. Download `DMS-<version>-win64.zip` from
-[Releases](https://github.com/razedproduction/DMS-in-Gmod/releases) and follow [docs/install.md](docs/install.md):
+[Releases](https://github.com/razedproduction/Delirium-physics-in-GMod/releases) and follow [docs/install.md](docs/install.md):
 installation, first steps (`dms_homer`, `dms_menu`), FAQ.
 
 - [docs/install.md](docs/install.md): installation and FAQ.
