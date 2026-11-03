@@ -1,6 +1,6 @@
 //! The Playroom room's shot (`fire`, `shot_frame`; docs/adr/0016, 0033): a bullet's damage on his health (the game's
 //! `ped::damage` with weaponinfo.xml's weapon), the limb's injury mask, the bullet's impulse and the ShotTask with the
-//! weapon's taskparams set, then its messages every other step. The module's room (`module/src/follow/room.rs`) and
+//! weapon's taskparams set, then its messages every other step. The module's room (`crates/dms-core/src/follow/room.rs`) and
 //! the rig editor's agent shoot through it, so a shot is the same in both.
 //!
 //! The state it changes is the caller's (the Playroom `Sim`'s fields, [`Victim`]); what it says and sends comes back

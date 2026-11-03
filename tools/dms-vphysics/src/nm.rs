@@ -1,5 +1,5 @@
 //! VPhysics-Box3D's `IPhysicsNM` (`VBOX3D_NM_006`), as `include/vphysics_nm.h` of the fork declares it (a copy
-//! is in `module/src/ffi/`).
+//! is in `crates/dms-core/src/ffi/`).
 //!
 //! Win64 only: a C++ virtual call is a plain C call with `this` first, so the vtable is a struct of
 //! `extern "C"` function pointers in declaration order.

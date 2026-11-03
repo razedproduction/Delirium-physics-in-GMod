@@ -146,7 +146,11 @@ impl Script {
     }
 }
 
-/// The body an agent drives: Homer's (the only one here, docs/adr/0036).
+/// The body an agent drives (docs/adr/0037): NM's build (the crate's, as the Playroom steps it) and the same body as
+/// NM's physics has it (its parts' parents, joints' frames, pivots and limits). Homer's here ([`BodyDef::homer`]); a
+/// host module adds its own (the ragdolls project's bodies fitted to a model) with [`BodyDef::new`], with no code
+/// path for them in the core. Whatever the body, it's NM's: [`PARTS`] parts in NM's order (the head part 12, the
+/// thighs 1 and 4), as the agent, its room and the Playroom's reactions take them.
 pub struct BodyDef {
     pub build: delirium::ragdoll::Build,
     pub body: dms_game::body::Body,
@@ -156,6 +160,14 @@ impl BodyDef {
     /// Homer's, as the data holds it.
     pub fn homer(d: &Data) -> Arc<BodyDef> {
         Arc::new(BodyDef { build: d.homer.clone(), body: d.body.clone() })
+    }
+
+    /// Another body of NM's [`PARTS`] parts: its build and its body, which must have them all.
+    pub fn new(build: delirium::ragdoll::Build, body: dms_game::body::Body) -> Result<Arc<BodyDef>, String> {
+        if build.parts.len() != PARTS || body.parts.len() != PARTS {
+            return Err(format!("{PARTS} parts expected, the build has {} and the body {}", build.parts.len(), body.parts.len()));
+        }
+        Ok(Arc::new(BodyDef { build, body }))
     }
 }
 
@@ -1060,7 +1072,7 @@ impl Follower {
 
     /// The agent's state as telemetry (a JSON object), in the game's frame (m).
     pub fn telemetry(&self) -> String {
-        use crate::bench::json;
+        use crate::json;
         let d = &self.agent.doll;
         let frames: Vec<Transform> = d.frames().collect();
         let (com, v) = d.com();

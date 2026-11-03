@@ -1,4 +1,4 @@
--- NM's world (ROADMAP M5, docs/adr/0018): the map's static geometry from its .bsp (module/src/world.rs), the
+-- NM's world (ROADMAP M5, docs/adr/0018): the map's static geometry from its .bsp (crates/dms-core/src/world.rs), the
 -- surface of each material for NM's friction, and the props near each FOLLOW agent as NM's boxes every tick.
 
 local METRES_PER_UNIT = 0.0254

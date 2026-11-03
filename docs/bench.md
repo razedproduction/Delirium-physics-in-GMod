@@ -72,7 +72,7 @@ physics over a step, `limit_use`: how full NM's joint limits are, `state_v`: vel
 `bench`; with the LEAD agent also `step`, `nm_t`, `mode`, `held`, `balancing`, `fallen`, `pelvis_z`, `head_z`, `com`,
 `com_v`, `parts`, `contacts`, `drives`, `feedback`, `script`.
 
-## Scenarios on Homer in FOLLOW (`module/src/follow.rs`, ROADMAP M4)
+## Scenarios on Homer in FOLLOW (`crates/dms-core/src/follow.rs`, ROADMAP M4)
 
 `dms-ctl run` (and `golden behaviour --source`) runs a scenario on **Homer in FOLLOW on Box3D**: Lua spawns Homer in
 the Playroom's pose at the room's start (3 m higher for `!button fall`), the player where the Playroom's camera is (4 m

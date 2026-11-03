@@ -10,7 +10,7 @@ The fork's licence is MIT, the file `vphysics/LICENSE` (the rest of the reposito
 
 ## What's where
 
-- `vphysics/include/vphysics_nm.h`: the interface; the copy for the FFI is `module/src/ffi/vphysics_nm.h` (compare them
+- `vphysics/include/vphysics_nm.h`: the interface; the copy for the FFI is `crates/dms-core/src/ffi/vphysics_nm.h` (compare them
   at every change of the interface).
 - `vphysics/src/physics_nm.*`: the implementation of `IPhysicsNM`; the other NM changes are in `physics_object.*`,
   `physics_constraint.*`, `physics_environment.cpp` (the step callback) and `cmake/patches/*.patch` (Box3D patches:

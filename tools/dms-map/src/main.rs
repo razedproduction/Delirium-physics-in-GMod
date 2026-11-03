@@ -28,7 +28,7 @@ const WATER: &str = "GM_CONSTRUCT/WATER_13";
 const NODRAW: &str = "TOOLS/TOOLSNODRAW";
 /// The sky's floor: under the pool's bottom.
 const SKY_BOTTOM: f32 = -3.0;
-/// The fork's shell round the map's hulls (m, `module/src/world.rs` `SHAPE_INFLATION`): Box3D's floor, where NM's frame
+/// The fork's shell round the map's hulls (m, `crates/dms-core/src/world.rs` `SHAPE_INFLATION`): Box3D's floor, where NM's frame
 /// starts, is that much over the BSP's; the water's surface goes up by it too, to stay `stage::WATER` under NM's floor.
 const SHELL: f32 = (0.25 - 0.0001) * 0.0254;
 /// The slope beside the stages (not the Playroom's): rise over its length, how long, how wide (m).

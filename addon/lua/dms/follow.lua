@@ -1,4 +1,4 @@
--- Homer in FOLLOW (ROADMAP M4): NM drives the ragdoll's 21 bodies from the module's step callback (module/src/follow.rs).
+-- Homer in FOLLOW (ROADMAP M4): NM drives the ragdoll's 21 bodies from the module's step callback (crates/dms-core/src/follow.rs).
 -- Lua puts NM on a bound Homer (DMS_Follow), takes it off before the ragdoll goes, tells the module Source's gravity
 -- and hears of the agents in Think (docs/adr/0003): feedback, falls, sleep, NaN.
 
