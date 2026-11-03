@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 # Read only (docs/adr/0001).
 delirium = { path = "../../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium" }
+delirium-data = { path = "../../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-data" }
 dms-game = { path = "../dms-game" }
 # Only its hulls (NM's capsules and boxes as VPhysics-Box3D grows them).
 dms-homer = { path = "../dms-homer" }

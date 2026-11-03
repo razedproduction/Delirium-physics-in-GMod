@@ -51,7 +51,7 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 - Каждая веха ROADMAP (M1, M2, …) делается **в отдельной новой сессии**.
 - **Работа через PR.** В `main` напрямую не коммитить и не пушить. Каждая веха (или отдельная правка) — своя
   ветка от свежего `origin/main` (`git fetch` + `git switch -c <ветка> origin/main`), коммиты в неё, затем
-  `git push -u origin <ветка>` и `gh pr create --base main` (repo `razedproduction/DMS-in-Gmod`). Пуш ветки и
+  `git push -u origin <ветка>` и `gh pr create --base main` (repo `razedproduction/Delirium-physics-in-GMod`, бывший `DMS-in-Gmod`). Пуш ветки и
   открытие PR входят в завершение вехи; мерж PR делает только пользователь. Сессии, работающие параллельно в одной
   папке, не переключают чужую ветку.
 

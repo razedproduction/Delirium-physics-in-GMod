@@ -115,4 +115,4 @@ and `garrysmod\data\dms` by hand if you like.
 ## For modders
 
 The Lua API (`dms.Attach`, controllers, hooks, reactions): `docs/api.md` in the repository
-(https://github.com/razedproduction/DMS-in-Gmod). Building from source: the repository's README.
+(https://github.com/razedproduction/Delirium-physics-in-GMod). Building from source: the repository's README.

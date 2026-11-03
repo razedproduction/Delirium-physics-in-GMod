@@ -247,7 +247,7 @@ boxes; the look is the Playroom's (NM's capsules and boxes, without GTA IV's mes
       ellipse of leans in the parent's frame, the Box3D patch `box3d-elliptical-cone.patch`; it was twist/cone/plane
       with a heuristic axis and X/Y mixed up, the hip went ~15° past). `golden body` passes: the tensor 7e-8, joints in a
       fall ≤ 0.5° past NM's limits, pivots ≤ 0.6 mm.
-- [ ] The user's visual check (docs/homer.md: the look, `vcollide_wireframe 1`, a fall).
+- [x] The user's visual check (docs/homer.md: the look, `vcollide_wireframe 1`, a fall): passed (2026-11-03).
 
 **DoD:** `dms-homer` makes `homer.mdl` from the copy of GTA IV in one command; `tools/golden body` passes: the build
 matches the Playroom's (1e-5), a spawned Homer has all 21 parts matching the Playroom (position ≤ 1 mm, rotation ≤ 0.5°,
@@ -311,11 +311,12 @@ without them Homer fell in ~2 s.
 - [x] The fork's fixes (ADR 0017, `VBOX3D_NM_003` without changing the interface): armature (`Cdot0` once a sub-step, 8
       Gauss–Seidel passes over the joints with armature), the step's starting velocity in `GetBodyState`, continuous
       gravity for NM bodies. `golden body` passes.
-- [ ] Known divergences (the plan is the next step in the physics, ADR 0017): `relax-1s` outside tolerance (the
+- [x] Known divergences (the plan is the next step in the physics, ADR 0017): `relax-1s` outside tolerance (the
       supporting foot sinks 2–4 cm into Box3D's soft contact under the impact load); Box3D's floor 6.35 mm above the
       BSP; the shot: M6.
       → M5 (ADR 0018): the floor is taken into account; the cause of `relax-1s` refined: the joints stretching, not
       the contact.
+      → Left as known divergences (the user's decision, 2026-11-03): see M5's item.
 
 **DoD:** standing under `bodyBalance` 60 s, a push, `catchFall`, `relax`, the first 60 steps of a shot within the
 scenario's tolerances; `relax-1s` outside tolerance, the cause and the plan in ADR 0017; 4 Homers at once: 67 ticks/s
@@ -345,7 +346,7 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       `ledge` (rooftop).
 - [x] Water: Homer in the map's water as in the Playroom's pool (v0.2.1): the same `buoyancy` message with the same
       params and the water's surface from the map; the Playroom's GPU water simulation isn't carried over.
-      Done (ADR 0033): the `.bsp`'s water brushes; the room layer's pool line where the Playroom has it
+      Done (ADR 0034): the `.bsp`'s water brushes; the room layer's pool line where the Playroom has it
       (`self_preserve`, so with the additional reactions, and again after `stopAllBehaviours`); the fork lets water
       act on a body NM drives only through NM (Source's buoyancy floated Homer and male_07 on its own). On
       gm_construct: without the additional reactions he sinks, with them he floats 0.19 m under the surface (Homer
@@ -357,7 +358,7 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       `server.ps1 start -Map dms_stages`): `kerb`, `rooftop`, `lowwall`, `stairs`; the `said=` check (the room layer's
       reactions). Within tolerance: `kerb`, all the earlier scenarios except `relax-1s`, for `rooftop` the reactions
       and the fall (except the pose after landing).
-- [ ] Known divergences (ADR 0018): `relax-1s` (0.77 s against 1.00) isn't the soft contact but Box3D's joints
+- [x] Known divergences (ADR 0018): `relax-1s` (0.77 s against 1.00) isn't the soft contact but Box3D's joints
       stretching under the weight (the ankle 6–10 mm; the fork's extra passes don't include the feet's contacts);
       `lowwall`, `stairs` and the `rooftop` landing are a chaotic amplification of the same stance divergence (2 cm
       before the push). The plan: NM bodies' contacts in the fork's extra Gauss–Seidel passes.
@@ -366,6 +367,17 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       left is the springiness of Box3D's soft joint `F / (m_eff · ω²)` (~5 mm standing); because of it `relax-1s` (now
       after 1.00 s), `kerb`'s pose, `lowwall` (close) and the `rooftop` landing are outside tolerance for now; the plan
       is NM joints' stiffness above the ¼ ceiling.
+      → Measured again on the bench (2026-11-03) and **left as they are (the user's decision)**: NM's own physics is
+      articulated (reduced coordinates, `delirium` `artic.rs`), its pivots never part; Box3D's soft joints stretch,
+      and the chaotic scenarios amplify those millimetres one way or the other, so no small change of the fork closes
+      all three. Now (4 sub-steps): the ankle's gap standing 4.8 mm mean / 7.5 max, `stand-1s` COM max 0.040 m,
+      `relax-1s` never below 0.85 m in its 60 steps (Playroom 1.00 s), `kerb` below 0.5 m at 3.4–4.8 s (Playroom 2.98,
+      tolerance 0.25) ending 0.39–0.49 m (0.208), `lowwall` 0.101 / 0.054 m, `rooftop` and `stairs` within; `kerb` is
+      the same on main's fork and the old map (3.27–4.78 s). Tried, not taken: 8 sub-steps (the whole world's): ankle
+      1.2 mm, `stand-1s` 0.022 m, `kerb`'s end within (0.217 m) but below 0.5 m at 3.97 s, `lowwall` 0.100 / 0.057,
+      `relax-1s` early (0.72 s ×3), male_07's `push` 0.057 (M10), the physics step with 8 Homers 11.3 → 16.2 ms;
+      NM joints alone at ½ the sub-step rate (ADR 0019): worse stages. Not tried, larger: projecting NM joints' pivots
+      after the step (1–2 days, fights the feet's contacts); an articulated solver for NM bodies in the fork (weeks).
 
 **DoD:** golden scenarios on the Playroom's stages (`--stage`: stairs, a wall, a ledge) match the Playroom on the same
 geometry built in GMod; NM's contacts (`nm_agent_get_part_contact`) match the touches in Box3D.
@@ -560,6 +572,17 @@ constraints, within 7 mm), the 6 bones without objects finished on the client. P
       Homer — its reference its own LEAD on the crate (`golden fit`, there), the Playroom can't load a fitted build (M9).
       `stand` and `catchfall` within them; `push` (COM mean 0.061 m, tolerance 0.05) and `shot` (0.378 m, 0.25) off:
       it steps away further than its LEAD (Homer: 0.020, 0.148), never falls, ends as high.
+      → The bench, 2026-11-03 (`golden fit`, the fork `VBOX3D_NM_006`): `stand`, `catchfall`, `shot` (COM mean 0.213 m,
+      tolerance 0.25), `stand-1s` (COM max 0.060 m, 0.08) within them; only `push` off: COM mean 0.0615–0.0621 m
+      over 3 runs (tolerance 0.05), max 0.079 (0.10), no fall, the end height 0.956 m against 0.963. The gap is made
+      **before** the poke (at 2.00 s): 0.057 m at 1.00 s, the poke adds ~0 (LEAD's COM goes 2.5 cm in the 6 s after
+      it, FOLLOW's 0.3 cm). It's Homer's stance divergence (ADR 0019), on a body that settles further: in the first
+      0.25 s FOLLOW's COM dips to 0.943 m against LEAD's 0.964 and takes its first step elsewhere (x +0.029 against
+      −0.013 at 0.75 s); standing, the COM is 6–7 mm lower (0.949 against 0.955), the feet's deepest contact
+      −12…−14 mm against NM's −7 (tilted feet), the joints' pivots apart up to 6 mm; and NM's own physics creeps on
+      the floor (LEAD ~2 mm/s while "still", then steps at ~30 s of `stand`, 0.58 m away at its end, as the
+      Playroom's Homer does at ~40 s; Box3D's friction holds the feet). Homer's
+      `push` has the same parts, smaller: 0.027 m at 1.00 s. What's left is M4/M5's stance item (the fork's joints).
 - [x] The body check (`golden body`) on the fitted body (moved to M11; done there: `golden body --fit`).
 - [x] The DMS window: "NM on the ragdoll under the crosshair" works on any model, the model's fit shown (height, mass,
       warnings).
@@ -676,7 +699,7 @@ awkward. It writes the rig files the addon reloads (M12), so the game can stay o
 - [x] **Simulation on the fork itself**, step 1: `vphysics.dll` (VPhysics-Box3D, `IPhysicsNM` `VBOX3D_NM_006`) loaded
       into the application, the fitted body made natively as the module makes it (a floor, gravity), dropped, thrown
       and dragged by the mouse without NM: the capsules, joints, limits and masses checked on the physics the game runs.
-- [ ] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
+- [x] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
       module's FOLLOW (`follow`, `bind`, `step`) out into a crate without Lua, Homer's golden held after it.
 
 **DoD:** a Workshop model whose rig isn't found by itself is made to stand under NM in the game with a rig made in the
@@ -695,7 +718,17 @@ on male_07 OK; a rig file written beside the running game (a thigh's radius, the
 refitted the model's ragdoll with NM within a second, and it stood (pelvis 0.98 m after 12 s). Open: no mounted
 Workshop model needs a rig of its own (62 ValveBiped, the rest not humanoid; `dms-rig --classify workshop`), and the
 game's own unmapped humanoids lack bones for required parts (the stalker's and the skeleton's hands, the poison
-zombie's head), so the DoD's model waits for one the user subscribes to; step 2 (NM in FOLLOW in the editor).
+zombie's head), so the DoD's model waits for one the user subscribes to.
+
+**Step 2 (ADR 0032, 0033):** the FOLLOW step's pieces (`dms_vphysics::follow`) and the room's shot
+(`dms_vphysics::follow::shot`: damage, injury, impulse, ShotTask) shared by the module and the editor. In the Simulate
+tab: *NM: bodyBalance* on the fitted body (or Homer's), *Push* (the Playroom's poke), the grab by the mouse, *Shoot*
+(the room's shot with the Playroom's weapon, from the front or behind, into any part; health and death), the
+Playroom's message-only buttons and a line for any of NM's messages. `--snap-report --sim 600 --nm balance --push 40`
+or `--shoot pistol` checks each body against LEAD with the same blow: Homer stands both (shot: staggers 1.8 m, health
+175, the pelvis at 0.887 m as in LEAD). Golden after the step's move (PR #30): 12 of 14 room scenarios within the
+tolerances, `drunk` and `relax-1s` out as on the base; the shot's move (0033) is to be checked on the bench with
+`shot`, `shotgun` and `death`.
 
 ### Deferred: Playroom features not needed for Homer's behaviour
 

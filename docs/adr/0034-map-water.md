@@ -1,4 +1,4 @@
-# 0033. The map's water as the Playroom's pool
+# 0034. The map's water as the Playroom's pool
 
 Status: accepted (2026-11-03, ROADMAP M5). Refines 0016 (the room layer), 0018 (NM's world from the map), 0020.
 

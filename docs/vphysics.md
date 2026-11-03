@@ -136,7 +136,7 @@ bodies (fred.xrt's self-collision pairs) before asking the game. `SetBodyState` 
 mass, rotation, velocities, SI) through `SetPositionMatrix` and `SetVelocityInstantaneous`. `CreateBody` keeps each
 hull by its points' bytes (up to 4096) and reuses it; `DestroyBody` leaves a kept hull.
 
-## Water through NM only (ADR 0033, the interface unchanged)
+## Water through NM only (ADR 0034, the interface unchanged)
 
 The Playroom's pool acts on its doll only through NM's `buoyancy` message; Source's water (`CPhysicsFluidController`,
 `CBuoyancyController`) floated an NM body as well: Homer standing on gm_construct's 2 m deep pool bottom came up to

@@ -14,6 +14,8 @@ use delirium::ragdoll::{Build, GRAVITY, Ragdoll};
 
 use crate::nm::PhysicsNMBodyState;
 
+pub mod shot;
+
 pub const PARTS: usize = 21;
 /// NM's own step.
 pub const DT: f64 = 1.0 / 60.0;
