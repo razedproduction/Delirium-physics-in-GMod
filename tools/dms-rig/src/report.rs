@@ -385,18 +385,45 @@ fn drop_test(sim: &mut Sim, body: &dms_game::body::Body, steps: u64) -> Result<(
 /// Under NM's bodyBalance: the pelvis' lowest bound (of its height standing), past which he's sunk or fallen.
 const STOOD: f32 = 0.8;
 
+/// What hits the body halfway through the balance check: the Playroom's poke (N s, none at 0) or the room's shot
+/// into the chest from the front with the Playroom's weapon.
+#[derive(Clone, Copy, Debug)]
+pub enum Blow {
+    Push(f32),
+    Shot(usize),
+}
+
+impl Blow {
+    fn says(self) -> String {
+        match self {
+            Blow::Push(n) => format!("pushed {n:.0} N s"),
+            Blow::Shot(w) => format!("shot ({})", dms_vphysics::follow::shot::WEAPONS[w].0),
+        }
+    }
+}
+
 /// The body stood on the fork as the editor's "NM: bodyBalance" stands it, NM's `bodyBalance` on it (`build` the
-/// fitted build), run `steps`: its faults (NM came off, he fell, the pelvis sank, not finite) and how he stood.
-fn balance_test(sim: &mut Sim, build: &delirium::ragdoll::Build, body: &dms_game::body::Body, floor: u8, steps: u64, push: f32) -> Result<(Vec<String>, String), String> {
+/// fitted build), run `steps`, `blow` halfway: its faults (NM came off, he fell, the pelvis sank, not finite) and how
+/// he stood, against the same in LEAD.
+fn balance_test(sim: &mut Sim, homer: &Homer, build: &delirium::ragdoll::Build, body: &dms_game::body::Body, steps: u64, blow: Blow) -> Result<(Vec<String>, String), String> {
     sim.place(body, 0.0, 0.0, Vec3::ZERO, Vec3::ZERO)?;
-    sim.nm_on(build, "balance")?;
+    sim.nm_on(build, &homer.data, "balance")?;
     let z0 = sim.states().ok_or("no body")?[0].pos.z;
     let (mut low, mut fell_at) = (z0, None);
     let mut pushed = None;
     while sim.steps < steps {
-        if sim.steps == steps / 2 && push > 0.0 {
-            pushed = sim.states().map(|s| s[0].pos);
-            sim.poke(dms_vphysics::follow::POKE_PART, Vec3::X, push);
+        if sim.steps == steps / 2 {
+            match blow {
+                Blow::Push(push) if push > 0.0 => {
+                    pushed = sim.states().map(|s| s[0].pos);
+                    sim.poke(dms_vphysics::follow::POKE_PART, Vec3::X, push);
+                }
+                Blow::Push(_) => {}
+                Blow::Shot(weapon) => {
+                    pushed = sim.states().map(|s| s[0].pos);
+                    sim.shoot(sim::ShotAt { weapon, ..Default::default() });
+                }
+            }
         }
         sim.run(sim::TIMESTEP);
         if let Some(s) = sim.states() {
@@ -407,7 +434,9 @@ fn balance_test(sim: &mut Sim, build: &delirium::ragdoll::Build, body: &dms_game
         }
     }
     let states = sim.states().ok_or("no body after the stand")?;
-    let (failed, fallen, balancing) = sim.with_nm(|a| (a.failed.clone(), a.agent.fallen, a.agent.balancing())).unwrap_or((Some("NM is off".into()), true, false));
+    let (failed, fallen, balancing, health, log) = sim
+        .with_nm(|a| (a.failed.clone(), a.agent.fallen, a.agent.balancing(), a.shots.health, a.log.clone()))
+        .unwrap_or((Some("NM is off".into()), true, false, 0.0, vec![]));
     sim.clear();
     let mut out = vec![];
     if let Some(e) = &failed {
@@ -417,34 +446,60 @@ fn balance_test(sim: &mut Sim, build: &delirium::ragdoll::Build, body: &dms_game
         out.push("the body's state isn't finite under NM".into());
     }
     let z = states[0].pos.z;
-    let lead = lead_z(build, body, floor, (steps as f32 * sim::TIMESTEP * 60.0) as usize);
+    let lead = lead_z(homer, build, body, (steps as f32 * sim::TIMESTEP * 60.0) as u64, blow);
     let lead_up = lead >= z0 * STOOD;
     if fallen || z < z0 * STOOD {
         out.push(format!("the body fell under bodyBalance: the pelvis at {z:.2} m of {z0:.2} m standing, down at {:.2} s ({})",
             fell_at.unwrap_or(sim::TIMESTEP * steps as f32),
             if lead_up { "it stands in NM's own physics" } else { "it falls in NM's own physics too" }));
     }
-    let moved = pushed.map_or(String::new(), |p: Vec3| format!(", pushed {push:.0} N s halfway and moved {:.2} m", (states[0].pos - p).with_z(0.0).length()));
-    Ok((out, format!("after {steps} steps of bodyBalance{moved}: the pelvis at {z:.3} m of {z0:.3} m (lowest {low:.3}), {}; in NM's own physics (LEAD, unpushed) at {lead:.3} m",
+    let moved = pushed.map_or(String::new(), |p: Vec3| format!(", {} halfway and moved {:.2} m", blow.says(), (states[0].pos - p).with_z(0.0).length()));
+    let shot = if matches!(blow, Blow::Shot(_)) {
+        let said: Vec<&String> = log.iter().filter(|l| !l.starts_with("FB ")).collect();
+        format!(", health {health:.0}\n      the agent's last lines: {}", said.iter().rev().take(6).rev().map(|s| s.as_str()).collect::<Vec<_>>().join(" | "))
+    } else {
+        String::new()
+    };
+    Ok((out, format!("after {steps} steps of bodyBalance{moved}: the pelvis at {z:.3} m of {z0:.3} m (lowest {low:.3}), {}; in NM's own physics (LEAD, the same blow) at {lead:.3} m{shot}",
         if balancing { "balancing" } else { "not balancing" })))
 }
 
 /// The reference: the same build in LEAD (NM's own physics, as the Playroom runs it, the module's `DMS.FitLead`) on
-/// NM's floor, `bodyBalance` from the start, `steps` NM steps: the pelvis' height at the end.
-fn lead_z(build: &delirium::ragdoll::Build, body: &dms_game::body::Body, floor: u8, steps: usize) -> f32 {
+/// NM's floor, `bodyBalance` from the start, `steps` NM steps with `blow` halfway (its `applyImpulse` taken by NM's
+/// own physics; the shot through the same room's shot as the editor's): the pelvis' height at the end.
+fn lead_z(homer: &Homer, build: &delirium::ragdoll::Build, body: &dms_game::body::Body, steps: u64, blow: Blow) -> f32 {
     use dms_vphysics::follow as core;
     let frames: Vec<Transform> = body.placed(Vec3::ZERO, 0.0).into_iter().map(|(p, q)| Transform::from_translation(p).with_rotation(q)).collect();
     let (p, t) = dms_game::floor(false, 50.0);
     let mut world = delirium::collision::Collision::default();
-    world.add(&p, &t, &vec![floor; t.len()]);
+    world.add(&p, &t, &vec![homer.floor_material; t.len()]);
     let mut agent = core::agent(build, &frames, 0.0);
     let mut msgs = delirium::msg::State::default();
-    for line in core::button_lines("balance").unwrap_or_default() {
+    let mut shots = sim::Shots::new(homer.data.clone());
+    let send = |agent: &mut delirium::nm::Agent, msgs: &mut delirium::msg::State, line: &str| {
         if let Some(Ok((m, ps))) = core::parse_line(line) {
-            let _ = delirium::msg::send(&mut agent, build, &world, &mut msgs, m.name, &ps);
+            let _ = delirium::msg::send(agent, build, &world, msgs, m.name, &ps);
         }
-    }
-    for _ in 0..steps {
+    };
+    let mut lines: Vec<String> = core::button_lines("balance").unwrap_or_default().iter().map(|l| l.to_string()).collect();
+    for n in 0..steps {
+        lines.extend(std::mem::take(&mut agent.extras.outbox).into_iter().filter(|l| !l.starts_with("#say ")));
+        if n == steps / 2 {
+            match blow {
+                Blow::Push(push) if push > 0.0 => {
+                    let at = agent.doll.centre(core::POKE_PART);
+                    lines.push(core::poke_line(core::POKE_PART, at, Vec3::X, push));
+                }
+                Blow::Push(_) => {}
+                Blow::Shot(weapon) => lines.extend(shots.fire(&agent, sim::ShotAt { weapon, ..Default::default() }, n).lines),
+            }
+        }
+        if n % 2 == 0 {
+            lines.extend(shots.frame(&agent, n).1);
+        }
+        for l in std::mem::take(&mut lines) {
+            send(&mut agent, &mut msgs, &l);
+        }
         agent.step(build, &world, core::DT as f32, &[], &[]);
     }
     agent.doll.frames().next().map_or(0.0, |f| f.translation.z)
@@ -457,16 +512,16 @@ fn fit(homer: &Homer, skel: &Skeleton, path: &str, r: &Rig) -> Result<Fit, Strin
 
 /// Prints the scores of every complete humanoid model whose path has one of `filters` (comma-separated): snapped, or
 /// the plain fit (`plain`); every part's with `verbose`; each body dropped on the fork (`sim`) for that many steps, or
-/// with `balance` stood under NM's bodyBalance and pushed halfway (N s; the filter `homer` adds Homer's own body,
+/// with `balance` stood under NM's bodyBalance and pushed or shot halfway (the filter `homer` adds Homer's own body,
 /// golden's, as the reference). Returns the models with faults.
-pub fn run(homer: &Homer, fs: &GameFs, filters: &str, plain: bool, verbose: bool, mut sim: Option<(Sim, u64)>, balance: Option<f32>) -> usize {
+pub fn run(homer: &Homer, fs: &GameFs, filters: &str, plain: bool, verbose: bool, mut sim: Option<(Sim, u64)>, balance: Option<Blow>) -> usize {
     let filters: Vec<&str> = filters.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
     let mut models: Vec<String> = fs.models().into_iter().map(|m| m.0).filter(|p| filters.iter().any(|f| p.contains(f))).collect();
     models.sort();
     models.dedup();
     let (mut bad, mut done) = (0, 0);
     if let (Some((s, steps)), Some(push), true) = (&mut sim, balance, filters.contains(&"homer")) {
-        match balance_test(s, &homer.build, &homer.body, homer.floor_material, *steps, push) {
+        match balance_test(s, homer, &homer.build, &homer.body, *steps, push) {
             Ok((faults, how)) => {
                 done += 1;
                 bad += usize::from(!faults.is_empty());
@@ -508,7 +563,7 @@ pub fn run(homer: &Homer, fs: &GameFs, filters: &str, plain: bool, verbose: bool
             let mut status = status;
             if let Some((s, steps)) = &mut sim {
                 let (more, how) = match balance {
-                    Some(push) => balance_test(s, &f.build, &f.body, homer.floor_material, *steps, push)?,
+                    Some(push) => balance_test(s, homer, &f.build, &f.body, *steps, push)?,
                     None => drop_test(s, &f.body, *steps)?,
                 };
                 faults.extend(more);

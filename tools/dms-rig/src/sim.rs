@@ -6,23 +6,30 @@
 //! With NM on it (docs/adr/0032), the Playroom's agent drives the body in FOLLOW as the module's agents do: a step
 //! callback on the environment (`SetStepCallback`) reads the parts (`GetBodyState`), runs NM's 1/60 s steps due on
 //! an accumulator, and puts NM's armature on the joints and its drives, the balancer's impulses and gravity's
-//! compensation on the bodies (`ApplyBodyDrive`), all of it `dms_vphysics::follow`'s, the module's own pieces. The
-//! Playroom room's reactions round the agent (its tasks, get-ups, `in_air`, the additional reactions) are the
-//! module's and aren't here: the editor runs the behaviour it's given and nothing more.
+//! compensation on the bodies (`ApplyBodyDrive`), all of it `dms_vphysics::follow`'s, the module's own pieces. Of the
+//! Playroom room's reactions round the agent only its shot is here (`fire`, `shot_frame`, health and death:
+//! `dms_vphysics::follow::shot`, the module's too, docs/adr/0033); its tasks, get-ups, `in_air` and the additional
+//! reactions are the module's and aren't: the editor runs the behaviour it's given and nothing more.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use delirium::collision::Collision;
 use delirium::msg;
 use delirium::nm::Agent;
 use delirium::prelude::*;
 use delirium::ragdoll::Build;
+use delirium::shottask::ShotTask;
+use delirium_data::rng::Rand;
+use delirium_data::taskparams::TaskParams;
+use delirium_data::weapons::Weapon;
 use dms_fit::M;
 use dms_game::body::Body;
 use dms_vphysics::body::{NativeBody, PartState};
+use dms_vphysics::follow::shot::{self, CHEST, START_HEALTH};
 use dms_vphysics::follow::{self as core, PARTS};
 use dms_vphysics::host::{Environment, Host};
 use dms_vphysics::nm::{self, IPhysicsConstraint, IPhysicsEnvironment, IPhysicsObject, Nm, PhysicsNMBodyState};
@@ -47,6 +54,88 @@ pub fn find_vphysics(gmod: &Path, repo: Option<&Path>) -> Vec<PathBuf> {
         }
     }
     v.into_iter().filter(|p| p.is_file()).collect()
+}
+
+/// What the room's shot reads from the player's GTA IV, as the module loads it (`Data`): weaponinfo.xml's weapons
+/// and taskparams.txt (NM's defaults without one).
+#[derive(Default)]
+pub struct GameData {
+    pub weapons: Vec<Weapon>,
+    pub tp: TaskParams,
+}
+
+/// A shot asked for: into `part` with the Playroom's weapon `weapon`, from the front (its `shot` button) or from behind
+/// (`shot back`).
+#[derive(Clone, Copy, Debug)]
+pub struct ShotAt {
+    pub part: usize,
+    pub weapon: usize,
+    pub back: bool,
+}
+
+impl Default for ShotAt {
+    fn default() -> ShotAt {
+        ShotAt { part: CHEST, weapon: 0, back: false }
+    }
+}
+
+/// The room's state the shot keeps (the module's `Room` fields `fire` and `shot_frame` read), for an agent without
+/// the rest of the room; its switches as the Playroom's defaults (`weak`, `god` off).
+pub struct Shots {
+    data: Arc<GameData>,
+    pub health: f32,
+    pub dead: bool,
+    rand: Rand,
+    hurt: [f32; 4],
+    task: Option<(ShotTask, u64)>,
+}
+
+impl Shots {
+    pub fn new(data: Arc<GameData>) -> Shots {
+        Shots { data, health: START_HEALTH, dead: false, rand: Rand::default(), hurt: [0.0; 4], task: None }
+    }
+
+    /// The ShotTask is running.
+    pub fn task(&self) -> bool {
+        self.task.is_some()
+    }
+
+    /// The room's `fire` (`shot` and `shot back` among its buttons) on `agent` after `steps` NM steps: what to say
+    /// and the lines to send him.
+    pub fn fire(&mut self, agent: &Agent, at: ShotAt, steps: u64) -> shot::Fired {
+        let aim = at.back.then(|| {
+            let parts: Vec<Vec3> = agent.doll.frames().map(|f| f.translation).collect();
+            let fwd = shot::forward(&parts);
+            (parts.get(at.part).copied().unwrap_or(Vec3::ZERO) - fwd * 0.1, fwd, -fwd)
+        });
+        let s = shot::Shot { part: at.part.min(PARTS - 1), aim, fatal: false, more: &[], weapon: at.weapon, weak: false, god: false };
+        let v = shot::Victim { health: &mut self.health, rand: &mut self.rand, hurt: &mut self.hurt, task: &mut self.task };
+        shot::fire(v, agent, &self.data.weapons, &self.data.tp, &s, self.dead, steps)
+    }
+
+    /// The room's `shot_frame` (every other step): death at health 0 (`STOP all`, then `relax`), the ShotTask's
+    /// lines; what to say and the lines to send.
+    pub fn frame(&mut self, agent: &Agent, steps: u64) -> (Vec<String>, Vec<String>) {
+        let (mut say, mut lines) = (vec![], vec![]);
+        if self.health <= 0.0 && !self.dead {
+            self.dead = true;
+            self.task = None;
+            for b in ["STOP all", "relax"] {
+                lines.extend(core::button_lines(b).unwrap_or_default().iter().map(|l| l.to_string()));
+            }
+            say.push("dead (health 0): limp".to_string());
+        }
+        if let Some(step) = shot::task_frame(&mut self.task, &mut self.rand, &self.data.tp, agent, self.health, steps) {
+            lines.extend(step.lines);
+            if step.fire {
+                say.push("blind fire shot (no gun here)".into());
+            }
+            if step.done {
+                say.push("the shot task finished".into());
+            }
+        }
+        (say, lines)
+    }
 }
 
 /// A part held by the mouse: the point on it (m, the part's frame) and where it's pulled to (m, world).
@@ -92,6 +181,9 @@ pub struct NmAgent {
     pub button: String,
     /// NM's feedback of the last step.
     feedback: Vec<String>,
+    /// The room's shot on him, and the shots asked for the next step.
+    pub shots: Shots,
+    shoot: Vec<ShotAt>,
 }
 
 impl NmAgent {
@@ -100,7 +192,7 @@ impl NmAgent {
     ///
     /// # Safety
     /// `made`'s bodies are live until the agent is dropped.
-    unsafe fn new(nm: &Nm, made: &NativeBody, build: &Build, floor_material: u8, yaw: f32, comp: bool) -> Result<NmAgent, String> {
+    unsafe fn new(nm: &Nm, made: &NativeBody, build: &Build, data: Arc<GameData>, floor_material: u8, yaw: f32, comp: bool) -> Result<NmAgent, String> {
         // SAFETY: the caller's.
         let states = unsafe { made.states(nm)? };
         let frames: Vec<Transform> = states.iter().map(|s| Transform::from_translation(s.pos).with_rotation(s.rot)).collect();
@@ -132,12 +224,19 @@ impl NmAgent {
             cost: 0.0,
             button: String::new(),
             feedback: vec![],
+            shots: Shots::new(data),
+            shoot: vec![],
         })
     }
 
     /// A message line for the next NM step (`<message> [param=value ...]`, the Playroom's console's).
     pub fn queue(&mut self, line: &str) {
         self.queued.push(line.trim().to_string());
+    }
+
+    /// A shot for the next NM step (the room's `fire`, before the step as the module's reactions are).
+    pub fn shoot(&mut self, at: ShotAt) {
+        self.shoot.push(at);
     }
 
     /// NM's doll is asleep (the Playroom's `mode` 2): no behaviours, no drives.
@@ -193,6 +292,24 @@ impl NmAgent {
             let (k, j, hit, equalize) = core::impulse_params(&ps);
             let _ = msg::send(&mut self.agent, &self.build, &self.world, &mut self.msgs, "applyImpulse", &ps);
             self.kicks.extend(core::kick(&self.agent.doll, k, j, hit, equalize));
+        }
+        // The room's part before the step (the module's `room_before`): the shots, then on even steps its
+        // `shot_frame`.
+        for at in std::mem::take(&mut self.shoot) {
+            let fired = self.shots.fire(&self.agent, at, self.steps);
+            self.say(fired.say);
+            for l in &fired.lines {
+                self.send(l);
+            }
+        }
+        if self.steps % 2 == 0 {
+            let (said, lines) = self.shots.frame(&self.agent, self.steps);
+            for s in said {
+                self.say(s);
+            }
+            for l in &lines {
+                self.send(l);
+            }
         }
         let unit = core::balancer_unit(&self.agent, &self.build, dt);
         self.agent.step_follow(&self.build, &self.world, dt, &[], &[]);
@@ -413,9 +530,9 @@ impl Sim {
         Ok(())
     }
 
-    /// NM (the Playroom's agent, `build` the body's) on the body as it is, its button `button` pressed (`balance`:
-    /// `bodyBalance start=true`).
-    pub fn nm_on(&mut self, build: &Build, button: &str) -> Result<(), String> {
+    /// NM (the Playroom's agent, `build` the body's, `data` what its shot reads) on the body as it is, its button
+    /// `button` pressed (`balance`: `bodyBalance start=true`).
+    pub fn nm_on(&mut self, build: &Build, data: &Arc<GameData>, button: &str) -> Result<(), String> {
         let lines = core::button_lines(button).ok_or_else(|| format!("no Playroom button {button}"))?;
         self.nm_off();
         let Some((made, body)) = &self.body else { return Err("no body to put NM on".into()) };
@@ -423,7 +540,7 @@ impl Sim {
             return Err(format!("NM's body has {PARTS} parts"));
         }
         // SAFETY: the body is live; the agent goes before it (`clear`).
-        let mut a = unsafe { NmAgent::new(&self.host.nm, made, build, self.floor_material, 0.0, self.nm_gravity)? };
+        let mut a = unsafe { NmAgent::new(&self.host.nm, made, build, data.clone(), self.floor_material, 0.0, self.nm_gravity)? };
         for l in lines {
             a.queue(l);
         }
@@ -469,6 +586,21 @@ impl Sim {
     pub fn poke(&mut self, k: usize, dir: Vec3, impulse: f32) {
         let Some(at) = self.states().and_then(|s| s.get(k).map(|p| p.pos)) else { return };
         self.with_nm(|a| a.queue(&core::poke_line(k, at, dir, impulse)));
+    }
+
+    /// The room's shot under NM (its `shot` and `shot back` buttons, the weapon picked as by `!weapon`).
+    pub fn shoot(&mut self, at: ShotAt) {
+        self.with_nm(|a| a.shoot(at));
+    }
+
+    /// A message line (`<message> [param=value ...]`) or the Playroom's button (`balance`, `relax`, `STOP all`, ...)
+    /// to NM for its next step.
+    pub fn send(&mut self, line: &str) {
+        let lines: Vec<String> = match core::button_lines(line.trim()) {
+            Some(ls) => ls.iter().map(|l| l.to_string()).collect(),
+            None => vec![line.to_string()],
+        };
+        self.with_nm(|a| lines.iter().for_each(|l| a.queue(l)));
     }
 
     /// The physics run on by `dt` of real time (s), in the game's steps; the mouse's pull applied each step: as the

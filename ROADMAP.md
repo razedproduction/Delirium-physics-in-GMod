@@ -693,7 +693,7 @@ awkward. It writes the rig files the addon reloads (M12), so the game can stay o
 - [x] **Simulation on the fork itself**, step 1: `vphysics.dll` (VPhysics-Box3D, `IPhysicsNM` `VBOX3D_NM_006`) loaded
       into the application, the fitted body made natively as the module makes it (a floor, gravity), dropped, thrown
       and dragged by the mouse without NM: the capsules, joints, limits and masses checked on the physics the game runs.
-- [ ] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
+- [x] Step 2: NM in FOLLOW in the application, as in the game (`bodyBalance`, a push, a shot, NM's messages): the
       module's FOLLOW (`follow`, `bind`, `step`) out into a crate without Lua, Homer's golden held after it.
 
 **DoD:** a Workshop model whose rig isn't found by itself is made to stand under NM in the game with a rig made in the
@@ -712,7 +712,17 @@ on male_07 OK; a rig file written beside the running game (a thigh's radius, the
 refitted the model's ragdoll with NM within a second, and it stood (pelvis 0.98 m after 12 s). Open: no mounted
 Workshop model needs a rig of its own (62 ValveBiped, the rest not humanoid; `dms-rig --classify workshop`), and the
 game's own unmapped humanoids lack bones for required parts (the stalker's and the skeleton's hands, the poison
-zombie's head), so the DoD's model waits for one the user subscribes to; step 2 (NM in FOLLOW in the editor).
+zombie's head), so the DoD's model waits for one the user subscribes to.
+
+**Step 2 (ADR 0032, 0033):** the FOLLOW step's pieces (`dms_vphysics::follow`) and the room's shot
+(`dms_vphysics::follow::shot`: damage, injury, impulse, ShotTask) shared by the module and the editor. In the Simulate
+tab: *NM: bodyBalance* on the fitted body (or Homer's), *Push* (the Playroom's poke), the grab by the mouse, *Shoot*
+(the room's shot with the Playroom's weapon, from the front or behind, into any part; health and death), the
+Playroom's message-only buttons and a line for any of NM's messages. `--snap-report --sim 600 --nm balance --push 40`
+or `--shoot pistol` checks each body against LEAD with the same blow: Homer stands both (shot: staggers 1.8 m, health
+175, the pelvis at 0.887 m as in LEAD). Golden after the step's move (PR #30): 12 of 14 room scenarios within the
+tolerances, `drunk` and `relax-1s` out as on the base; the shot's move (0033) is to be checked on the bench with
+`shot`, `shotgun` and `death`.
 
 ### Deferred: Playroom features not needed for Homer's behaviour
 

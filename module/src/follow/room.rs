@@ -13,19 +13,18 @@ use delirium::prelude::*;
 use delirium::shottask::{self, ShotTask};
 use delirium_data::rng::Rand;
 use dms_game::getup::{self, Rise};
+use dms_vphysics::follow::shot;
+/// The shot's own pieces are shared with the rig editor (`dms_vphysics::follow::shot`, docs/adr/0033).
+pub use dms_vphysics::follow::shot::{CHEST, START_HEALTH, WEAPONS, weapon};
 
 use super::{Follower, PARTS, v3};
 
-pub const CHEST: usize = 9;
 pub const HEAD: usize = 12;
-const THIGH_L: usize = 1;
-const THIGH_R: usize = 4;
 /// The Playroom's constants (`delirium-room` main.rs).
 const WHIZZ: f32 = 1.5;
 const BURN: f32 = 6.0;
 const BURN_DAMAGE: f32 = 25.0;
 const SHOCK: f32 = 2.5;
-const INJURY_MAX: f32 = 0.8;
 const NEAR_BURST: f32 = 0.5;
 const DIVE: (f32, f32) = (3.5, 3.0);
 const TUMBLE: f32 = 7.0;
@@ -36,23 +35,6 @@ const LEAN_SECS: f32 = 1.5;
 const MUSC_STIFF: (f32, f32) = (11.0, 12.0);
 /// `MUSC_HELP` (the Playroom's `DELIRIUM_HELP`, unset).
 const MUSC_HELP: f32 = 0.5;
-pub const START_HEALTH: f32 = 200.0;
-/// The Playroom's guns: its name, weaponinfo.xml's, the force without the file.
-pub const WEAPONS: [(&str, &str, f32); 13] = [
-    ("pistol", "PISTOL", 50.0),
-    ("deagle", "DEAGLE", 50.0),
-    ("smg", "MP5", 50.0),
-    ("ak47", "AK47", 50.0),
-    ("sniper", "SNIPERRIFLE", 50.0),
-    ("shotgun", "SHOTGUN", 50.0),
-    ("rpg", "RLAUNCHER", 50.0),
-    ("grenade", "GRENADE", 50.0),
-    ("molotov", "MOLOTOV", 50.0),
-    ("bat", "BASEBALLBAT", 50.0),
-    ("knife", "KNIFE", 50.0),
-    ("taser", "TASER", 10.0),
-    ("baton", "BASEBALLBAT", 50.0),
-];
 /// The Playroom's additional reactions (`XR`), bit `i` of `extra_pick`.
 pub const EXTRA: [&str; 8] = [
     "Windmill arms",
@@ -184,8 +166,7 @@ struct Side {
 
 impl Side {
     fn new(parts: Vec<Vec3>) -> Side {
-        let right = parts.get(THIGH_R).copied().unwrap_or(Vec3::X) - parts.get(THIGH_L).copied().unwrap_or(Vec3::ZERO);
-        let fwd = Vec3::Z.cross(right).with_z(0.0).normalize_or(Vec3::Y);
+        let fwd = shot::forward(&parts);
         Side { parts, fwd }
     }
     fn p(&self, k: usize) -> Vec3 {
@@ -348,11 +329,6 @@ impl Room {
     }
 }
 
-/// Which of the Playroom's weapons a name is (its own or weaponinfo.xml's), pistol for an unknown one.
-pub fn weapon(name: &str) -> usize {
-    WEAPONS.iter().position(|w| w.0.eq_ignore_ascii_case(name) || w.1.eq_ignore_ascii_case(name)).unwrap_or(0)
-}
-
 impl Follower {
     fn ours(&self) -> Side {
         Side::new(self.agent.doll.frames().map(|f| f.translation).collect())
@@ -363,11 +339,7 @@ impl Follower {
     }
 
     fn now(&self) -> u32 {
-        (self.steps as f64 * 1000.0 / 60.0) as u32
-    }
-
-    fn hit(&self) -> Hit {
-        Hit { health: self.room.health, ..Hit::ragdoll(&self.agent) }
+        shot::now(self.steps)
     }
 
     fn tp(&self) -> &delirium_data::taskparams::TaskParams {
@@ -510,63 +482,16 @@ impl Follower {
     pub(super) fn fire(&mut self, part: usize, aim: Option<(Vec3, Vec3, Vec3)>, fatal: bool, more: &[usize], w: usize) {
         self.cancel_rise();
         self.room.still = 0.0;
-        let before = self.room.health;
-        let was_dead = self.room.dead || before <= 0.0;
-        let (label, name, fallback) = WEAPONS[w];
-        let data = self.data.clone();
-        let weapon = data.weapons.iter().find(|x| x.name == name);
-        let hit = weapon.map(|wp| {
-            use delirium_data::ped;
-            let mut h = ped::Health { health: self.room.health, ..Default::default() };
-            let (mut lost, mut instant) = (0.0, false);
-            for &p in std::iter::once(&part).chain(more) {
-                let hit = ped::Hit::new(wp.damage, wp, delirium_data::nm_asset::PART_BONES[p], ped::Attacker::Player { sure: true });
-                let o = ped::damage(&mut h, &hit, &ped::Victim::default(), &mut self.room.rand);
-                (lost, instant) = (lost + o.lost, instant || o.flags & ped::INSTANT != 0);
-            }
-            self.room.health = h.health;
-            (lost, instant)
-        });
-        if fatal {
-            self.room.health = 0.0;
-        }
-        if self.room.set.god {
-            self.room.health = START_HEALTH;
-        }
-        let health = self.room.health;
-        let state = if health < 50.0 { "fatally injured" } else if health < 100.0 { "injured (dying)" } else { "standing" };
-        self.say(&format!(
-            "room  shot ({label}) at part {part} {}: -{:.1}{} -> health {health:.1} ({state})",
-            delirium_data::nm_asset::PARTS.get(part).unwrap_or(&"?"),
-            hit.map_or(0.0, |h| h.0),
-            if hit.is_some_and(|h| h.1) { " (instant kill)" } else { "" },
-        ));
+        let (data, tp) = (self.data.clone(), self.tuned_tp.clone());
+        let s = shot::Shot { part, aim, fatal, more, weapon: w, weak: self.room.set.weak, god: self.room.set.god };
+        let victim = shot::Victim { health: &mut self.room.health, rand: &mut self.room.rand, hurt: &mut self.room.hurt, task: &mut self.room.shot_task };
+        let fired = shot::fire(victim, &self.agent, &data.weapons, tp.as_deref().unwrap_or(&data.tp), &s, self.room.dead, self.steps);
+        self.say(&format!("room  {}", fired.say));
         if self.room.set.tasks {
             (self.room.exit, self.room.nm_t, self.room.failed) = (SHOT_EXIT, Some(0.0), false);
         }
-        let ours = self.ours();
-        let (at, d, n) = aim.unwrap_or((ours.p(part) + ours.fwd * 0.1, -ours.fwd, ours.fwd));
-        self.mark(part, at);
-        if let Some((lost, _)) = hit
-            && !was_dead
-        {
-            self.injure(part, (lost / 100.0).clamp(0.15, 0.5));
-        }
-        let agility = if self.room.set.weak { 2 } else { 3 };
-        let set = weapon.map_or("*", |wp| nm::weapon_set(wp, agility));
-        let vel = shottask::bullet(at, at - d.normalize() * 3.0, weapon.map_or(fallback, |wp| wp.force));
-        let mut o = vec![format!("applyImpulse partIndex={part} hitPoint={} impulse={}", v3(at), v3(vel))];
-        if was_dead {
-            return self.send_ours(o);
-        }
-        let (hit, now) = (self.hit(), self.now());
-        let tp = self.tuned_tp.clone();
-        let tp = tp.as_deref().unwrap_or(&data.tp);
-        match self.room.shot_task.as_mut() {
-            Some((t, _)) => o.extend(t.next_hit(&mut self.room.rand, tp, &hit, now, set, part, at, vel, n).iter().map(shottask::text)),
-            None => self.room.shot_task = Some((ShotTask::new(&hit, set, part, at, vel, n), self.steps)),
-        }
-        self.send_ours(o);
+        self.mark(part, fired.at);
+        self.send_ours(fired.lines);
     }
 
     /// `mark`: where the hit landed, for the face and the overlay (the Playroom's ring; its blood isn't ported).
@@ -578,10 +503,9 @@ impl Follower {
 
     /// `injure`: a limb's injury mask, worse with each hit.
     fn injure(&mut self, part: usize, by: f32) {
-        let Some(l) = [(13..=16, 0), (17..=20, 1), (1..=3, 2), (4..=6, 3)].into_iter().find(|r| r.0.contains(&part)).map(|r| r.1) else { return };
-        self.room.hurt[l] = (self.room.hurt[l] + by).min(INJURY_MAX);
-        let line = format!("injury mask={} amount={:.2}", ["ul", "ur", "ll", "lr"][l], self.room.hurt[l]);
-        self.send(&line);
+        if let Some(line) = shot::injury(&mut self.room.hurt, part, by) {
+            self.send(&line);
+        }
     }
 
     /// `shot_frame` (every other step): death at health 0, the ShotTask's messages.
@@ -594,24 +518,16 @@ impl Follower {
             self.say("room  dead (health 0): limp; Reset pose brings him back");
             events.push(super::Event { id: self.id, kind: "died", text: String::new(), value: 0.0 });
         }
-        let (mut t, made) = match self.room.shot_task.take() {
-            Some((t, made)) if self.steps >= made + 2 => (t, made),
-            other => return self.room.shot_task = other,
-        };
-        let (hit, now) = (self.hit(), self.now());
-        let data = self.data.clone();
-        let tp = self.tuned_tp.clone();
-        let step = t.update(&mut self.room.rand, tp.as_deref().unwrap_or(&data.tp), &hit, now);
-        for m in &step.msgs {
-            self.send(&shottask::text(m));
+        let (data, tp) = (self.data.clone(), self.tuned_tp.clone());
+        let Some(step) = shot::task_frame(&mut self.room.shot_task, &mut self.room.rand, tp.as_deref().unwrap_or(&data.tp), &self.agent, self.room.health, self.steps) else { return };
+        for l in &step.lines {
+            self.send(l);
         }
         if step.fire {
             self.say("ours  blind fire shot (no gun in the room)");
         }
         if step.done {
             self.say("room  the shot task finished");
-        } else {
-            self.room.shot_task = Some((t, made));
         }
     }
 

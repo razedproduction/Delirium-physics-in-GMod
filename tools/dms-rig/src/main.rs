@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "\
 usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphysics.dll>] [--model <models/...mdl>]
                 [--select <part>] [--snap] [--tool <select|move|rotate|scale|all>] [--yaw <degrees>]
-                [--screenshot <file.png> [--sim <steps> [--nm <button> [--push <N s>]]]] [--homer]
+                [--screenshot <file.png> [--sim <steps> [--nm <button> [--push <N s> | --shoot <weapon>]]]] [--homer]
   the rig editor: a model's NM rig made by the mouse, saved as garrysmod\\data\\dms\\skeletons\\<model>.json
   --gmod      Garry's Mod's folder (default: DMS_GMOD_DIR, else Steam's library from the registry)
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
@@ -30,10 +30,11 @@ usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphys
   --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
   --nm        with --sim: the body stood and NM put on it with the Playroom's button (balance: bodyBalance), not dropped
   --push      with --nm: the Playroom's poke of that many N s into the spine halfway (--snap-report: 8 by default)
+  --shoot     with --nm: the room's shot into the chest halfway instead, with the Playroom's weapon (pistol, ak47, ...)
   --homer     simulates Homer's own body (as in golden) instead of the model's fitted one
   --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
   --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)
-  --snap-report <text[,text...]> [--plain] [--verbose] [--sim <steps> [--nm balance [--push <N s>]]]
+  --snap-report <text[,text...]> [--plain] [--verbose] [--sim <steps> [--nm balance [--push <N s> | --shoot <weapon>]]]
                      snaps every complete humanoid whose path has a <text> and scores its parts against their bones
                      and mesh (docs/rig-editor.md): the faults past the bounds; --plain scores the plain fit instead,
                      --verbose prints every part's scores, --sim drops each body on the fork and checks it settles
@@ -48,6 +49,8 @@ pub struct Homer {
     /// NM's CONCRETE row (friction, elasticity), the Playroom's floor, and its index in NM's surfaces.
     pub concrete: [f32; 2],
     pub floor_material: u8,
+    /// What the room's shot reads (weaponinfo.xml's weapons, taskparams.txt), as the module loads them.
+    pub data: std::sync::Arc<sim::GameData>,
 }
 
 fn load_homer(game: &Path) -> Result<Homer, String> {
@@ -66,7 +69,8 @@ fn load_homer(game: &Path) -> Result<Homer, String> {
     let body = dms_game::body::Body::new(&build, &frames);
     let floor_material = dms_game::concrete(&rows);
     let concrete = delirium::ragdoll::SURFACES.read().ok().and_then(|r| r.get(floor_material as usize).copied()).unwrap_or([1.0, 0.1]);
-    Ok(Homer { build, body, concrete, floor_material })
+    let data = sim::GameData { weapons: g.weapons(), tp: g.taskparams().as_deref().map_or_else(Default::default, delirium_data::taskparams::read) };
+    Ok(Homer { build, body, concrete, floor_material, data: std::sync::Arc::new(data) })
 }
 
 pub struct Options {
@@ -84,6 +88,8 @@ pub struct Options {
     pub nm: Option<String>,
     /// Under NM: the Playroom's poke of this many N s halfway through the screenshot's steps.
     pub push: Option<f32>,
+    /// Under NM: the room's shot with this Playroom weapon into the chest halfway (instead of the push).
+    pub shoot: Option<usize>,
     /// Homer's own body simulated, not the fit.
     pub homer: bool,
 }
@@ -132,6 +138,7 @@ fn run() -> Result<(), String> {
     let steps = take("--sim").map(|s| s.parse::<u64>().map_err(|e| format!("--sim {s}: {e}"))).transpose()?;
     let nm = take("--nm");
     let push = take("--push").map(|s| s.parse::<f32>().map_err(|e| format!("--push {s}: {e}"))).transpose()?;
+    let shoot = take("--shoot").map(|w| dms_vphysics::follow::shot::weapon(&w));
     if let Some(b) = &nm
         && dms_vphysics::follow::button_lines(b).is_none()
     {
@@ -175,11 +182,14 @@ fn run() -> Result<(), String> {
             }
             _ => None,
         };
-        let balance = (nm.as_deref() == Some("balance")).then(|| push.unwrap_or(dms_vphysics::follow::POKE));
+        let balance = (nm.as_deref() == Some("balance")).then(|| match shoot {
+            Some(w) => report::Blow::Shot(w),
+            None => report::Blow::Push(push.unwrap_or(dms_vphysics::follow::POKE)),
+        });
         let bad = report::run(&homer, &fs, &filters, plain, verbose, sim, balance);
         return if bad == 0 { Ok(()) } else { Err(format!("{bad} model(s) with faults")) };
     }
-    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap, yaw, nm, push, homer: homer_body };
+    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap, yaw, nm, push, shoot, homer: homer_body };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]).with_title("DMS rig editor"),
         depth_buffer: 24,
