@@ -19,7 +19,7 @@ use crate::render::{Batch, Camera, Renderer, Scene, Shared, View};
 use crate::rigfile::{self, Rig};
 use crate::scene::{self, Hulls};
 use crate::sim::{self, Sim};
-use crate::snap::{self, shape_rot};
+use crate::snap::{self, placement, shape_rot};
 use crate::{Homer, Options};
 
 /// A model open in the editor.
@@ -185,6 +185,10 @@ pub struct App {
     tab: Tab,
     sim: Option<Sim>,
     sim_err: Option<String>,
+    /// Homer's own body simulated (golden's), not the model's fit.
+    sim_homer: bool,
+    /// The push under NM (N s, the Playroom's poke by default).
+    push: f32,
     paste: String,
     import: String,
     shot: Option<(PathBuf, u64)>,
@@ -221,17 +225,6 @@ fn mirror_plane(m: &Model) -> Option<(Vec3, Vec3)> {
     let (l, r) = (at(1)?, at(4)?);
     let n = Vec3::new(l.x - r.x, l.y - r.y, 0.0).normalize_or_zero();
     (n != Vec3::ZERO).then_some(((l + r) * 0.5, n))
-}
-
-/// Part `k`'s placement on its bone (the edits' offset and turn) that puts its shape at `at` in the frame `want` (the
-/// shape's own axes), from the fit as it is with the part's edits `pe`.
-fn placement(f: &Fit, k: usize, pe: rigs::PartEdit, at: Vec3, want: Quat) -> (Vec3, Vec3) {
-    // The part's frame without its placement.
-    let t_rot = f.shown[k].rotation * scene::from_angles(pe.turn).inverse();
-    let t_pos = f.shown[k].translation - t_rot * pe.offset;
-    let turn = scene::angles((t_rot.inverse() * want * shape_rot(&f.body.parts[k].shape).inverse()).normalize());
-    // Rounded to a hundredth of a degree: the file's text stays short.
-    (t_rot.inverse() * (at - t_pos), (turn * 100.0).round() / 100.0)
 }
 
 /// The limbs' edits changed since `before` copied to their other sides, mirrored across the model's plane: joints'
@@ -319,6 +312,7 @@ impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>, homer: Homer, fs: GameFs, opts: Options) -> App {
         let models = fs.models();
         let shot = opts.screenshot.clone();
+        let sim_homer = opts.homer;
         let mut app = App {
             homer,
             models,
@@ -341,6 +335,8 @@ impl App {
             tab: Tab::Rig,
             sim: None,
             sim_err: None,
+            sim_homer,
+            push: dms_vphysics::follow::POKE,
             paste: String::new(),
             import: String::new(),
             shot,
@@ -364,15 +360,26 @@ impl App {
         }
         if let Some(m) = app.opts.model.clone() {
             app.open(&m);
+            if let Some(y) = app.opts.yaw {
+                app.cam.yaw = y.to_radians();
+            }
             app.sel = app.opts.select.as_ref().and_then(|s| PARTS.iter().position(|p| p.eq_ignore_ascii_case(s)));
             if app.opts.snap {
                 app.snap((0..21).collect());
                 println!("dms-rig: {}", app.status);
             }
-            if app.shot.as_ref().is_some_and(|s| s.1 > 0) {
-                app.tab = Tab::Sim;
-                app.start_sim();
-                app.sim_drop();
+            // A screenshot of a part: framed close.
+            if let (Some(k), Some(_), Some(Ok(f))) = (app.sel, &app.shot, app.cur.as_ref().map(|m| &m.fit)) {
+                app.cam.target = f.shown[k].translation;
+                app.cam.distance = 0.6;
+            }
+        }
+        if app.shot.as_ref().is_some_and(|s| s.1 > 0) {
+            app.tab = Tab::Sim;
+            app.start_sim();
+            match app.opts.nm.clone() {
+                Some(b) => app.sim_nm(&b),
+                None => app.sim_drop(),
             }
         }
         app
@@ -485,46 +492,16 @@ impl App {
             self.status = "snap: needs the model's mesh".into();
             return;
         };
-        // The plain fit: the model's joints and masses, Homer's parts as they fit them (no sizes, no placement).
-        let mut plain = m.rig.clone();
-        for pe in &mut plain.edits.parts {
-            *pe = rigs::PartEdit { mass: pe.mass, ..rigs::PartEdit::default() };
-        }
-        let (names, edits) = plain.args();
-        let f = match dms_fit::fit::fit(&self.homer.build, &self.homer.body, &m.skel, &m.path, names, edits) {
-            Ok(f) => f,
+        let before = m.rig.clone();
+        let phy = self.fs.read(&format!("{}.phy", m.path.strip_suffix(".mdl").unwrap_or(&m.path))).ok();
+        let done = match snap::snap_rig(&self.homer, &m.skel, mesh, phy.as_deref(), &m.path, &m.rig, &m.map(), &parts) {
+            Ok(d) => d,
             Err(e) => {
                 self.status = format!("snap: {e}");
                 return;
             }
         };
-        let (ts, g) = snap::targets(&m.skel, mesh, &m.map(), &f, &parts);
-        let before = m.rig.clone();
-        for t in &ts {
-            let pe = &mut m.rig.edits.parts[t.k];
-            let round = |v: f32| (v * 1e4).round() / 1e4;
-            match t.shape {
-                Shape::Capsule { radius, half, .. } => {
-                    pe.radius = Some(round(radius));
-                    pe.half = Some(round(half));
-                }
-                Shape::Box { half, .. } => pe.boxed = Some(half.to_array().map(round).into()),
-            }
-        }
-        refit(&self.homer, m);
-        if let Ok(f) = &m.fit {
-            let set: Vec<(usize, Vec3, Vec3)> = ts
-                .iter()
-                .map(|t| {
-                    let (offset, turn) = placement(f, t.k, m.rig.edits.parts[t.k], t.centre, t.frame);
-                    (t.k, offset, turn)
-                })
-                .collect();
-            for (k, offset, turn) in set {
-                m.rig.edits.parts[k].offset = offset;
-                m.rig.edits.parts[k].turn = turn;
-            }
-        }
+        m.rig = done.rig;
         refit(&self.homer, m);
         if self.symmetry && parts.len() == 1 {
             mirror(&self.homer, m, &before);
@@ -533,14 +510,7 @@ impl App {
             m.undo.push(before);
             m.redo.clear();
         }
-        self.status = format!(
-            "{} part(s) laid on the bones; thickness to Homer's: legs ×{:.2}, arms ×{:.2}, torso ×{:.2}, head ×{:.2}",
-            ts.len(),
-            g.legs,
-            g.arms,
-            g.torso,
-            g.head
-        );
+        self.status = done.status;
     }
 
     /// Part `k`'s bone set (`None`: none); the mapping kept only where it differs from the model's own.
@@ -598,7 +568,7 @@ impl App {
             return;
         };
         let deps = self.opts.gmod.join("bin").join("win64");
-        match Sim::new(dll, &deps, &self.fs.surface_scripts(), "concrete", self.homer.concrete) {
+        match Sim::new(dll, &deps, &self.fs.surface_scripts(), "concrete", self.homer.concrete, self.homer.floor_material) {
             Ok(s) => {
                 self.sim = Some(s);
                 self.sim_err = None;
@@ -607,13 +577,17 @@ impl App {
         }
     }
 
-    fn sim_body(&self) -> Option<dms_game::body::Body> {
-        self.cur.as_ref().and_then(|m| m.fit.as_ref().ok()).map(|f| f.body.clone())
+    /// The body to simulate and its build: the model's fit, or Homer's own.
+    fn sim_body(&self) -> Option<(delirium::ragdoll::Build, dms_game::body::Body)> {
+        if self.sim_homer {
+            return Some((self.homer.build.clone(), self.homer.body.clone()));
+        }
+        self.cur.as_ref().and_then(|m| m.fit.as_ref().ok()).map(|f| (f.build.clone(), f.body.clone()))
     }
 
     fn sim_place(&mut self, lift: f32, tilt: f32, vel: Vec3, spin: Vec3) {
         self.start_sim();
-        let Some(body) = self.sim_body() else {
+        let Some((_, body)) = self.sim_body() else {
             self.status = "no fitted body to simulate".into();
             return;
         };
@@ -626,6 +600,27 @@ impl App {
 
     fn sim_drop(&mut self) {
         self.sim_place(1.0, 0.4, Vec3::ZERO, Vec3::ZERO);
+    }
+
+    /// The body stood and NM put on it with the Playroom's `button` (`balance`: bodyBalance).
+    fn sim_nm(&mut self, button: &str) {
+        self.sim_place(0.0, 0.0, Vec3::ZERO, Vec3::ZERO);
+        let Some((build, _)) = self.sim_body() else { return };
+        let Some(s) = &mut self.sim else { return };
+        if !s.has_body() {
+            return;
+        }
+        if let Err(e) = s.nm_on(&build, button) {
+            self.sim_err = Some(e);
+        }
+    }
+
+    /// The Playroom's poke under NM: the push into its part 9, away from the view.
+    fn sim_push(&mut self) {
+        let dir = (self.cam.target - self.cam.eye()).with_z(0.0).normalize_or(Vec3::Y);
+        if let Some(s) = &mut self.sim {
+            s.poke(dms_vphysics::follow::POKE_PART, dir, self.push);
+        }
     }
 
     // ---- the 3D view -------------------------------------------------------------------------------------------
@@ -1002,6 +997,23 @@ impl App {
                 b.hull(pts, tris, f.shown[k], c);
                 sc.batches.push(b);
             }
+            // Where NM's head looks: an arrow out of its face (a capsule shows no face of its own).
+            let shape = f.body.parts[12].shape;
+            let reach = match shape {
+                Shape::Capsule { radius, .. } => radius,
+                Shape::Box { half, .. } => half.max_element(),
+            };
+            let (c, way) = (f.shown[12].translation, snap::face(f));
+            let up = (f.shown[12].rotation * shape_rot(&shape) * Vec3::Y).reject_from(way).normalize_or_zero();
+            let tip = c + way * (reach + 0.1);
+            let colour = [1.0, 0.95, 0.3, 1.0];
+            let mut b = Batch { lines: true, on_top: true, ..Batch::default() };
+            b.line(c + way * reach, tip, colour);
+            for side in [up, way.cross(up)] {
+                b.line(tip, tip - way * 0.03 + side * 0.02, colour);
+                b.line(tip, tip - way * 0.03 - side * 0.02, colour);
+            }
+            sc.batches.push(b);
         }
         if self.show_bones || self.pick.is_some() {
             let map = m.map();
@@ -1114,7 +1126,7 @@ impl App {
     fn sim_mouse(&mut self, view: &View, resp: &egui::Response, _pointer: Option<Pos2>) {
         let Some(s) = &mut self.sim else { return };
         if resp.drag_started_by(egui::PointerButton::Primary)
-            && let (Some(p), Some(states), Some(body)) = (resp.interact_pointer_pos(), s.states(), self.cur.as_ref().and_then(|m| m.fit.as_ref().ok()).map(|f| &f.body))
+            && let (Some(p), Some(states), Some(body)) = (resp.interact_pointer_pos(), s.states(), s.body())
         {
             let (o, d) = view.ray(p - resp.drag_delta());
             let best = states
@@ -1138,13 +1150,15 @@ impl App {
     }
 
     fn sim_scene(&mut self, sc: &mut Scene) {
-        let (Some(s), Some(m)) = (&self.sim, &self.cur) else { return };
-        let (Some(states), Ok(f)) = (s.states(), &m.fit) else { return };
-        if states.len() != f.body.parts.len() {
+        let Some(s) = &self.sim else { return };
+        let (Some(states), Some(body)) = (s.states(), s.body()) else { return };
+        if states.len() != body.parts.len() {
             return;
         }
         let parts: Vec<(Vec3, Quat)> = states.iter().map(|st| (st.pos, st.rot)).collect();
-        if let Some(me) = &m.mesh
+        // The model's mesh on its fitted body (not on Homer's).
+        if let Some(m) = self.cur.as_ref().filter(|_| !self.sim_homer)
+            && let (Some(me), Ok(f)) = (&m.mesh, &m.fit)
             && self.mesh_alpha > 0.0
         {
             let world = scene::pose_bones(&m.skel, f, &parts);
@@ -1156,7 +1170,7 @@ impl App {
         }
         if self.parts_alpha > 0.0 {
             for (k, st) in states.iter().enumerate() {
-                let shape = f.body.parts[k].shape;
+                let shape = body.parts[k].shape;
                 let (pts, tris) = self.hulls.get(&shape);
                 let mut b = Batch::default();
                 b.hull(pts, tris, Transform::from_translation(st.pos).with_rotation(st.rot), scene::part_color(k, self.parts_alpha));
@@ -1435,13 +1449,51 @@ impl App {
 
     fn sim_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Simulation on the fork");
-        ui.label("The fitted body made by VPhysics-Box3D as the module makes it (IPhysicsNM: CreateBody, CreateJoint, the bind, NM's collision pairs), without NM.");
+        ui.label("The fitted body made by VPhysics-Box3D as the module makes it (IPhysicsNM: CreateBody, CreateJoint, the bind, NM's collision pairs); NM on it as the module's agents drive one.");
         self.start_sim();
         if let Some(e) = &self.sim_err {
             ui.colored_label(Color32::from_rgb(255, 110, 110), e);
         }
         let Some(s) = &self.sim else { return };
         ui.label(egui::RichText::new(format!("{}  ({} surface properties)", s.dll.display(), s.surfaces)).weak());
+        if ui.checkbox(&mut self.sim_homer, "Homer's own body (golden's), not the fit").changed()
+            && let Some(s) = &mut self.sim
+        {
+            s.clear();
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("NM (Delirium, FOLLOW)").strong());
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("NM: bodyBalance").on_hover_text("stands the body and puts the Playroom's agent on it, its balance button pressed (bodyBalance start=true)").clicked() {
+                self.sim_nm("balance");
+            }
+            let on = self.sim.as_ref().is_some_and(|s| s.with_nm(|_| ()).is_some());
+            if ui.add_enabled(on, egui::Button::new("Push")).on_hover_text("the Playroom's poke: an impulse into the spine (part 9), away from the view").clicked() {
+                self.sim_push();
+            }
+            ui.add(egui::DragValue::new(&mut self.push).range(1.0..=200.0).speed(0.5).suffix(" N s"));
+            if ui.add_enabled(on, egui::Button::new("NM off")).clicked()
+                && let Some(s) = &mut self.sim
+            {
+                s.nm_off();
+            }
+        });
+        if let Some(s) = &self.sim {
+            s.with_nm(|a| {
+                let state = match &a.failed {
+                    Some(e) => format!("NM came off: {e}"),
+                    None if a.agent.fallen => "fallen".into(),
+                    None if a.agent.balancing() => "balancing".into(),
+                    None => "not balancing".into(),
+                };
+                ui.label(format!("{}: {state}; {} NM steps, {:.2} ms a step", a.button, a.steps, a.cost));
+                for l in &a.log {
+                    ui.label(egui::RichText::new(l).weak().small());
+                }
+            });
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("The body alone").strong());
         ui.horizontal_wrapped(|ui| {
             if ui.button("Stand").clicked() {
                 self.sim_place(0.0, 0.0, Vec3::ZERO, Vec3::ZERO);
@@ -1455,7 +1507,7 @@ impl App {
                     s.kick(Vec3::new(4.0, 1.0, 3.5), Vec3::new(1.5, -4.0, 2.0));
                 }
             }
-            if ui.button("Kick").on_hover_text("the body as it is, given a push").clicked()
+            if ui.button("Kick").on_hover_text("the body as it is, every part given 3 m/s sideways and up, and a spin").clicked()
                 && let Some(s) = &mut self.sim
             {
                 s.kick(Vec3::new(0.0, 3.0, 2.0), Vec3::new(0.0, 0.0, 3.0));
@@ -1473,7 +1525,7 @@ impl App {
         });
         let mut g = s.nm_gravity;
         ui.horizontal(|ui| {
-            ui.radio_value(&mut g, true, "NM's gravity (9.8 m/s², as under NM)");
+            ui.radio_value(&mut g, true, "NM's gravity (9.8 m/s², as under NM)").on_hover_text("under NM: Source's gravity and the module's compensating force (docs/adr/0007), else the environment's own");
             ui.radio_value(&mut g, false, "Source's (600 u/s²)");
         });
         if g != s.nm_gravity {
@@ -1485,7 +1537,7 @@ impl App {
             ui.label(format!("pelvis at {:.2} m, the lowest part's centre {:.2} m", st[0].pos.z, low));
         }
         if !s.has_body() {
-            ui.label("Stand, Drop or Throw puts the fitted body in; drag a part with the left button.");
+            ui.label("NM: bodyBalance, Stand, Drop or Throw puts the fitted body in; drag a part with the left button (under NM: the Playroom's grab).");
         }
     }
 }
@@ -1549,7 +1601,11 @@ impl eframe::App for App {
         {
             let want = self.shot.as_ref().map(|x| x.1).unwrap_or(0);
             if want > 0 {
+                let dir = (self.cam.target - self.cam.eye()).with_z(0.0).normalize_or(Vec3::Y);
                 while s.steps < want {
+                    if let Some(push) = self.opts.push.filter(|_| s.steps == want / 2) {
+                        s.poke(dms_vphysics::follow::POKE_PART, dir, push);
+                    }
                     s.run(sim::TIMESTEP);
                     if s.paused || !s.has_body() {
                         break;
