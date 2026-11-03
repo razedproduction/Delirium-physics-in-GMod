@@ -32,6 +32,8 @@ const LUMP_FACES: usize = 7;
 const LUMP_EDGES: usize = 12;
 const LUMP_SURFEDGES: usize = 13;
 const LUMP_MODELS: usize = 14;
+const LUMP_BRUSHES: usize = 18;
+const LUMP_BRUSHSIDES: usize = 19;
 const LUMP_DISPINFO: usize = 26;
 const LUMP_DISP_VERTS: usize = 33;
 const LUMP_TEXDATA_STRING_DATA: usize = 43;
@@ -39,6 +41,38 @@ const LUMP_TEXDATA_STRING_TABLE: usize = 44;
 
 /// Texinfo flags of faces nothing stands on: 2D and 3D sky, water (warp), triggers, nodraw, hint, skip.
 const SURF_SKIP: i32 = 0x2 | 0x4 | 0x8 | 0x40 | 0x80 | 0x100 | 0x200;
+/// A brush's contents: water (`CONTENTS_WATER`).
+const CONTENTS_WATER: i32 = 0x20;
+
+/// A water brush of the map (ROADMAP M5): its planes `n · p <= d` (m, the game's frame), the Playroom's pool for
+/// its room layer.
+pub struct Water {
+    planes: Vec<(Vec3, f32)>,
+}
+
+impl Water {
+    /// The water's top and bottom over `p`'s x and y (m, the game's frame), if `p`'s column goes through it.
+    fn column(&self, p: Vec3) -> Option<(f32, f32)> {
+        let (mut top, mut bottom) = (f32::INFINITY, f32::NEG_INFINITY);
+        for &(n, d) in &self.planes {
+            let rest = d - n.x * p.x - n.y * p.y;
+            if n.z > 1e-4 {
+                top = top.min(rest / n.z);
+            } else if n.z < -1e-4 {
+                bottom = bottom.max(rest / n.z);
+            } else if rest < -1e-4 {
+                return None;
+            }
+        }
+        (top.is_finite() && top > bottom).then_some((top, bottom))
+    }
+}
+
+/// The surface of the water `p` (m, the game's frame) is in or less than `above` m over (the Playroom's
+/// `over_pool(me) && me.z < WATER + above`): the highest such water's top whose bottom isn't over `p`.
+pub fn water_surface(water: &[Water], p: Vec3, above: f32) -> Option<f32> {
+    water.iter().filter_map(|w| w.column(p)).filter(|&(top, bottom)| bottom <= p.z && p.z < top + above).map(|w| w.0).reduce(f32::max)
+}
 
 /// A convex face of the map: its corners (m, the game's frame, out along its normal by the shell), wound
 /// counter-clockwise about its outward normal as NM's triangles are (the Playroom's floor and boxes face out); its
@@ -57,6 +91,8 @@ pub struct MapMesh {
     pub materials: Vec<String>,
     pub brush_faces: usize,
     pub displacements: usize,
+    /// The map's water brushes.
+    pub water: Arc<Vec<Water>>,
 }
 
 /// Faces facing up at least this much are ground (as NM's own `ground` casts take them, `n.z` 0.7).
@@ -315,7 +351,24 @@ pub fn parse(name: &str, b: &[u8]) -> Result<MapMesh, String> {
     if out_faces.is_empty() {
         return Err("the map's world has no faces NM could stand on".into());
     }
-    Ok(MapMesh { name: name.to_string(), faces: out_faces, materials: names, brush_faces: nfaces, displacements: ndisps })
+    // Water: the brushes with `CONTENTS_WATER` (`dbrush_t`, 12 bytes; `dbrushside_t`, 8, its plane first), their
+    // sides' planes in metres.
+    let (brushes, sides) = (lump(b, LUMP_BRUSHES)?, lump(b, LUMP_BRUSHSIDES)?);
+    let mut water = vec![];
+    for i in 0..brushes.len() / 12 {
+        if le_i32(brushes, i * 12 + 8)? & CONTENTS_WATER == 0 {
+            continue;
+        }
+        let (first, n) = (le_i32(brushes, i * 12)?.max(0) as usize, le_i32(brushes, i * 12 + 4)?.max(0) as usize);
+        let planes = (first..first + n)
+            .map(|s| {
+                let plane = le_u16(sides, s * 8)? as usize * 20;
+                Ok((vec3(planes, plane)?, le_f32(planes, plane + 12)? * METRES_PER_UNIT))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        water.push(Water { planes });
+    }
+    Ok(MapMesh { name: name.to_string(), faces: out_faces, materials: names, brush_faces: nfaces, displacements: ndisps, water: Arc::new(water) })
 }
 
 /// An agent's world is the map round him (docs/adr/0021): the faces within this (m, along NM's x and y) of the
@@ -464,11 +517,17 @@ pub fn collision(origin: Vec3, crop: [i32; 2]) -> Option<Arc<Collision>> {
     Some(c)
 }
 
+/// The current map's water brushes (none without a map).
+pub fn water() -> Arc<Vec<Water>> {
+    MAP.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or_else(Default::default, |m| m.mesh.water.clone())
+}
+
 pub const NATIVES: &[(&CStr, lua::CFunction)] = &[
     (c"MapLoad", map_load),
     (c"MapSurfaces", map_surfaces),
     (c"MapUnload", map_unload),
     (c"MapGround", map_ground),
+    (c"MapWater", map_water),
     (c"SurfaceMaterials", surface_materials),
 ];
 
@@ -501,9 +560,10 @@ unsafe fn surface_materials_impl(api: &Api, l: *mut LuaState) -> Result<c_int, S
 
 unsafe fn push_info(api: &Api, l: *mut LuaState, m: &MapMesh) {
     unsafe {
-        (api.createtable)(l, 0, 5);
+        (api.createtable)(l, 0, 6);
         api.set_str(l, c"name", &m.name);
         api.set_number(l, c"faces", m.brush_faces as f64);
+        api.set_number(l, c"water", m.water.len() as f64);
         api.set_number(l, c"displacements", m.displacements as f64);
         api.set_number(l, c"polygons", m.faces.len() as f64);
         (api.createtable)(l, m.materials.len() as c_int, 0);
@@ -583,6 +643,20 @@ native!(map_unload => map_unload_impl);
 unsafe fn map_unload_impl(_api: &Api, _l: *mut LuaState) -> Result<c_int, String> {
     *MAP.lock().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(0)
+}
+
+native!(map_water => map_water_impl);
+/// `DMS.MapWater(pos[, above])`: the surface's height (m, the game's frame) of the map's water `pos` is in or less
+/// than `above` m over (default 0), as the room layer finds it; nil if none. For checking it against the game's
+/// `util.PointContents`.
+unsafe fn map_water_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String> {
+    let p = Vec3::from_array(unsafe { api.check_vec3(l, 1)? });
+    let above = unsafe { api.opt_number(l, 2, 0.0)? } as f32;
+    match water_surface(&water(), p, above) {
+        Some(z) => unsafe { (api.pushnumber)(l, f64::from(z)) },
+        None => unsafe { (api.pushnil)(l) },
+    }
+    Ok(1)
 }
 
 native!(map_ground => map_ground_impl);

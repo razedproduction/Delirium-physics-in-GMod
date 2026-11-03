@@ -110,6 +110,7 @@ The scenarios now:
 | `death` | window | a fatal shot in the head: `STOP all`, `relax`, he goes limp |
 | `getup` | window | `relax`, lies 2 s, gets up with the game's clip (`get_up_fast`), `bodyBalance` again |
 | `tasks` | window | `!set tasks 1`, a shot: the task ends, Homer goes to the animation (stands) |
+| `pool` | window, stage=pool | `!set extra_reactions 1`, a blast 1.5 m behind him throws him into the room's pool: `buoyancy`, he floats (ADR 0034) |
 
 ## The `--rec` format
 
@@ -163,6 +164,7 @@ Homer on Box3D is compared by **the scenario's tolerances**: the `#! tol` line (
 The Playroom's stages (`#! window stage=<name>`, ADR 0018): the Playroom runs with `--stage <name>`, the bench on the
 `dms_stages` map (`tools/dms-map`, `server.ps1 start -Map dms_stages`), Homer at the stage's start (`room.start`). Stage
 scenarios: `kerb`, `lowwall`, `rooftop`, `stairs` (an `applyImpulse` push of 90 N·s into the chest towards the kerb, the
-wall, the edge, the steps).
+wall, the edge, the steps). `stage=pool` is the Playroom's own room with its pool (the Playroom gives its room for any
+`--stage` that isn't one of its stages), on `dms_stages` with the water (ADR 0034).
 
 `golden behaviour --source --lead`: the former comparison of the SDK's LEAD agent to three digits of the recording.

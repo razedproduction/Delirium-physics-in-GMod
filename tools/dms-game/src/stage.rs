@@ -9,15 +9,51 @@ pub enum Block {
     Concrete,
 }
 
-/// A stage: its boxes (centre, half sizes, m) and Homer's start (his lowest point there, the pelvis above it).
+/// A stage: its boxes (centre, half sizes, m), Homer's start (his lowest point there, the pelvis above it) and whether
+/// its floor has the room's pool ([`crate::POOL`], [`POOL_DEEP`] deep, water up to [`WATER`]).
 pub struct Stage {
     pub name: &'static str,
     pub boxes: Vec<([f32; 3], [f32; 3], Block)>,
     pub start: [f32; 3],
+    pub pool: bool,
 }
 
-/// The stages there are.
-pub const NAMES: [&str; 8] = ["bigstairs", "stairsdown", "rooftop", "highledge", "lowwall", "kerb", "rail", "open"];
+/// The stages there are; `pool` is the Playroom's own room (`world::Room::blocks`, the build with its default
+/// `portal` feature), which the Playroom gives for any `--stage` that isn't one of its stages (ROADMAP M5: water).
+pub const NAMES: [&str; 9] = ["bigstairs", "stairsdown", "rooftop", "highledge", "lowwall", "kerb", "rail", "open", "pool"];
+
+/// The room's pool: its depth under the floor and its water's surface (`world::POOL_DEEP`, `world::WATER`, m).
+pub const POOL_DEEP: f32 = 1.5;
+pub const WATER: f32 = -0.1;
+
+/// The Playroom room's boxes (`world::Room::blocks(.., false)` with `portal`): a low brick wall, steps and a block,
+/// the pool's walls, bottom and steps down, the portal mode's wall and platform.
+fn room() -> Vec<([f32; 3], [f32; 3], Block)> {
+    use Block::{Brick, Concrete};
+    let mut v = vec![([0.0, 3.5, 0.5], [4.0, 0.15, 0.5], Brick)];
+    for i in 0..10 {
+        let top = 0.18 * (i + 1) as f32;
+        v.push(([-3.75, -1.5 + 0.3 * i as f32 + 0.15, top * 0.5], [0.75, 0.15, top * 0.5], Concrete));
+    }
+    v.push(([-3.75, 2.0, 0.9], [0.75, 0.5, 0.9], Concrete));
+    let ([a, b], d, rim) = (crate::POOL, POOL_DEEP, 0.3);
+    let (m, hw, z) = ([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5], [(b[0] - a[0]) * 0.5, (b[1] - a[1]) * 0.5], -(d + 0.2) * 0.5 - 0.001);
+    for (c, h) in [
+        ([a[0] - rim * 0.5, m[1]], [rim * 0.5, hw[1] + rim]),
+        ([b[0] + rim * 0.5, m[1]], [rim * 0.5, hw[1] + rim]),
+        ([m[0], a[1] - rim * 0.5], [hw[0], rim * 0.5]),
+        ([m[0], b[1] + rim * 0.5], [hw[0], rim * 0.5]),
+    ] {
+        v.push(([c[0], c[1], z], [h[0], h[1], z.abs() - 0.001], Concrete));
+    }
+    v.push(([m[0], m[1], -d - 0.1], [hw[0], hw[1], 0.1], Concrete));
+    for i in 0..8 {
+        let top = -0.18 * (i + 1) as f32;
+        v.push(([b[0] - 0.3 * i as f32 - 0.15, a[1] + 0.6, (top - d) * 0.5], [0.15, 0.6, (top + d) * 0.5], Concrete));
+    }
+    v.extend([([10.0, 0.0, 3.0], [0.15, 4.0, 3.0], Concrete), ([6.0, 3.0, 5.0], [3.0, 3.0, 0.1], Concrete)]);
+    v
+}
 
 /// A stage by name, as `world::stage` has it.
 pub fn stage(name: &str) -> Option<Stage> {
@@ -47,7 +83,8 @@ pub fn stage(name: &str) -> Option<Stage> {
             [0.0; 3],
         ),
         "open" => (vec![], [0.0; 3]),
+        "pool" => (room(), [0.0; 3]),
         _ => return None,
     };
-    Some(Stage { name: NAMES.iter().copied().find(|n| *n == name)?, boxes, start })
+    Some(Stage { name: NAMES.iter().copied().find(|n| *n == name)?, boxes, start, pool: name == "pool" })
 }

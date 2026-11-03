@@ -259,6 +259,8 @@ pub struct Room {
     fall: Option<(f32, bool)>,
     hold: Option<f32>,
     airborne: bool,
+    /// In the water (the Playroom's `wet`, its pool): the surface's height NM's `buoyancy` was given (NM's frame).
+    wet: Option<f32>,
     curled: bool,
     was_fallen: bool,
     /// Getting up: the clip being played (`rises[0]`), the muscles' (`musc`), how long he's lain still, his pelvis
@@ -307,6 +309,7 @@ impl Room {
             fall: None,
             hold: None,
             airborne: false,
+            wet: None,
             curled: false,
             was_fallen: false,
             rise: None,
@@ -326,6 +329,22 @@ impl Room {
     /// `xr`: additional reaction `i` is on.
     fn xr(&self, i: usize) -> bool {
         self.set.extra && self.set.extra_pick & (1 << i) != 0
+    }
+}
+
+/// `buoyancy`'s `surfacePoint` for water whose surface is at `z` (NM's frame): the Playroom's `0,0,WATER`; on a
+/// surface at 0 (which NM takes for "his chest"), the point over him.
+fn surface_point(me: Vec3, z: f32) -> String {
+    v3(if format!("{z:.3}").trim_start_matches('-') == "0.000" { me.with_z(z) } else { Vec3::Z * z })
+}
+
+impl Follower {
+    /// After `stopAllBehaviours` in the water, the Playroom's `send` starts `buoyancy` again.
+    pub(super) fn rewet(&mut self, line: &str) {
+        if let Some(z) = self.room.wet.filter(|_| line.starts_with("stopAllBehaviours")) {
+            let me = self.agent.doll.com().0;
+            self.send(&format!("buoyancy start=true surfacePoint={}", surface_point(me, z)));
+        }
     }
 }
 
@@ -894,6 +913,14 @@ impl Follower {
                 self.send("highFall start=true");
                 self.say("ours  dropping: arms out (additional reactions)");
             }
+        }
+        // The Playroom's pool (`over_pool(me) && me.z < WATER + 0.4`, out at 0.9): the map's water under him.
+        let above = if self.room.wet.is_some() { 0.9 } else { 0.4 };
+        let level = crate::world::water_surface(&self.water, me + self.origin, above).map(|z| z - self.origin.z);
+        if level.is_some() != self.room.wet.is_some() {
+            self.room.wet = level;
+            self.say(&format!("ours  {} the pool at {}", if level.is_some() { "into" } else { "out of" }, v3(me)));
+            self.send(&level.map_or("buoyancy start=false".into(), |z| format!("buoyancy start=true surfacePoint={}", surface_point(me, z))));
         }
         if self.room.hold.is_some_and(|t| now >= t) {
             self.room.hold = None;

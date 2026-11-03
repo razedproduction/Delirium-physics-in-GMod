@@ -725,7 +725,8 @@ void CBuoyancyController::Prepare()
 {
 	CPhysicsObject *pObject = m_pObject;
 	m_nPreparedStep = pObject->GetEnvironment()->GetStepCount();
-	const bool bSimulate = !pObject->GetShadowController() && ( pObject->GetCallbackFlags() & CALLBACK_DO_FLUID_SIMULATION );
+	const bool bSimulate = !pObject->GetShadowController() && ( pObject->GetCallbackFlags() & CALLBACK_DO_FLUID_SIMULATION ) &&
+		!pObject->IsNMDriveCurrent();
 	m_flDensity = bSimulate ? pObject->GetBuoyancyRatio() * m_pFluid->GetDensity() : 0.0f;
 	if ( m_flDensity == 0.0f || std::isnan( m_flDensity ) )
 		return;

@@ -257,6 +257,8 @@ pub struct Follower {
     pub cost: f64,
     /// The centre of the map's crop NM's world is (m, NM's frame, `world::CROP`); none for the Playroom's floor.
     crop: Option<[i32; 2]>,
+    /// The map's water (the game's frame), the Playroom's pool for the room layer (ROADMAP M5).
+    water: Arc<Vec<crate::world::Water>>,
 }
 
 // SAFETY: the pointers are only used on the game's main thread, where the physics and Lua both run.
@@ -392,6 +394,7 @@ impl Follower {
             parked: None,
             cost: 0.0,
             crop,
+            water: crate::world::water(),
             data,
             def,
         }
@@ -882,6 +885,7 @@ impl Follower {
         if let Some((k, impulse, hit, equalize)) = kick {
             self.kick(k, impulse, hit, equalize);
         }
+        self.rewet(line);
     }
 
     /// `applyImpulse` moves the Playroom's doll (`equalized_impulse`, solved in its physics step); in FOLLOW the

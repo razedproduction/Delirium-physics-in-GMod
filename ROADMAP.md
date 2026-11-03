@@ -344,8 +344,14 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       budget".
 - [x] The Playroom's room layer on the stages with the same code (ADR 0016): `stairs_frame` (`rollDownStairs`),
       `ledge` (rooftop).
-- [ ] Water: Homer in the map's water as in the Playroom's pool (v0.2.1): the same `buoyancy` message with the same
+- [x] Water: Homer in the map's water as in the Playroom's pool (v0.2.1): the same `buoyancy` message with the same
       params and the water's surface from the map; the Playroom's GPU water simulation isn't carried over.
+      Done (ADR 0034): the `.bsp`'s water brushes; the room layer's pool line where the Playroom has it
+      (`self_preserve`, so with the additional reactions, and again after `stopAllBehaviours`); the fork lets water
+      act on a body NM drives only through NM (Source's buoyancy floated Homer and male_07 on its own). On
+      gm_construct: without the additional reactions he sinks, with them he floats 0.19 m under the surface (Homer
+      and male_07). Golden `pool` (the Playroom's room with its pool on `dms_stages`, a blast throws him in): into the
+      pool 3.43–3.47 s against 3.50, the same `buoyancy`, floating at −0.28 m against −0.29.
 - [x] A test map: `tools/dms-map` → `dms_stages.bsp` (the Playroom's stages `bigstairs`, `stairsdown`, `rooftop`,
       `highledge`, `lowwall`, `kerb`, `rail`, `open` and a 20° slope, a site a stage); ice isn't done (with the water).
 - [x] Golden scenarios on the stages (`#! window stage=…` → the Playroom's `--stage`, the bench

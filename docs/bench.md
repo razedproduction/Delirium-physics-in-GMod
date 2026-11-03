@@ -95,7 +95,7 @@ Hero, the Playroom's cars and other `!…`.
 `golden behaviour --source [names]` compares the recordings with the Playroom **by the scenario's tolerances**: the
 `#! tol` line in the scenario's file (`golden/README.md`): the COM gap, the final height, the fall, the settling time,
 the commands' steps, the room layer's reactions. Within tolerance now: `stand` (60 s), `stand-1s`, `push`, `relax`,
-`catchfall`, the first 60 steps of `shot`, the `stairs` stage; outside: `relax-1s`, `lowwall` (close), `kerb`'s final
+`catchfall`, the first 60 steps of `shot`, the `stairs` stage, the `pool` (ADR 0034); outside: `relax-1s`, `lowwall` (close), `kerb`'s final
 pose, the landing in `rooftop` (ADR 0019), `drunk`'s wander (no fall and the end height as the Playroom's, the COM apart:
 ADR 0029); `relax`'s final height is near its tolerance (0.150–0.179 m against 0.140 ± 0.03 over 4 runs). `--lead`: the former LEAD agent of the SDK on the Playroom's floor (as
 `dms_selftest`): its recordings match the Playroom to three digits, except `push` (the camera), `catchfall` and `shot`.
@@ -116,11 +116,13 @@ fork's 6.35 mm shell) under `info_player_start` (`dms_bench_scene`; `DMS.BenchSc
 
 NM's world comes from the current map's `.bsp` (`world.lua`, `dms_map [reload]`, `[DMS] NM's world: …` in the log); the
 floor is 1 m squares on the agent's frame, like the Playroom's floor. `DMS_MapCheck(pos, half, n)` compares the heights
-of NM's world with the game's traces. Props within 3 m of the agent are NM's obstacles (`obstacles` in the telemetry),
+of NM's world with the game's traces; `DMS.MapWater(pos[, above])` is the surface of the map's water the room layer
+finds there (its water brushes, ADR 0034), to hold against `util.PointContents`. Props within 3 m of the agent are NM's obstacles (`obstacles` in the telemetry),
 `pivot_gap` is the gap of the joints' pivots on Box3D's state.
 
 The Playroom's stages are the map `dms_stages` (made by `cargo run --release -p dms-map`: the `.vmf` in
 `target/dms-map/`, the game's `vbsp/vvis/vrad`, `garrysmod/maps/dms_stages.bsp`; not in git): `bigstairs`,
-`stairsdown`, `rooftop`, `highledge`, `lowwall`, `kerb`, `rail`, `open` and a slope, a site for each stage
+`stairsdown`, `rooftop`, `highledge`, `lowwall`, `kerb`, `rail`, `open`, `pool` (the Playroom's own room: its boxes and
+its pool with water, ADR 0034) and a slope, a site for each stage
 (`info_target dms_stage_<name>`, `DMS.BenchScene(<name>)`). Stage scenarios (`#! window stage=<name>`) run on the bench
 with `server.ps1 start -Map dms_stages`; the room's scenarios run on either map.

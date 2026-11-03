@@ -23,6 +23,14 @@ const WALL: f32 = 0.5;
 const CONCRETE: &str = "CONCRETE/CONCRETEFLOOR001A";
 const BRICK: &str = "BRICK/BRICKWALL001A";
 const SKY: &str = "TOOLS/TOOLSSKYBOX";
+/// The pool's water (gm_construct's, which GMod has), its other sides not drawn.
+const WATER: &str = "GM_CONSTRUCT/WATER_13";
+const NODRAW: &str = "TOOLS/TOOLSNODRAW";
+/// The sky's floor: under the pool's bottom.
+const SKY_BOTTOM: f32 = -3.0;
+/// The fork's shell round the map's hulls (m, `module/src/world.rs` `SHAPE_INFLATION`): Box3D's floor, where NM's frame
+/// starts, is that much over the BSP's; the water's surface goes up by it too, to stay `stage::WATER` under NM's floor.
+const SHELL: f32 = (0.25 - 0.0001) * 0.0254;
 /// The slope beside the stages (not the Playroom's): rise over its length, how long, how wide (m).
 const SLOPE: (f32, f32, f32) = (20.0, 6.0, 4.0);
 
@@ -57,9 +65,14 @@ impl Vmf {
 
     /// A convex brush of planes (point, outward normal), all sides of one material.
     fn brush(&mut self, planes: &[(V, V)], material: &str) {
+        self.brush_sides(&planes.iter().map(|&(p, n)| (p, n, material)).collect::<Vec<_>>());
+    }
+
+    /// A convex brush of planes (point, outward normal), each side its material.
+    fn brush_sides(&mut self, planes: &[(V, V, &str)]) {
         let id = self.id();
         let mut s = format!("\tsolid\n\t{{\n\t\t\"id\" \"{id}\"\n");
-        for &(p, n) in planes {
+        for &(p, n, material) in planes {
             let side = self.id();
             // Texture axes: world-aligned, the axis least along the normal first.
             let (u, v) = if n[2].abs() > 0.7 { ("[1 0 0 0] 0.25", "[0 -1 0 0] 0.25") } else if n[0].abs() > n[1].abs() { ("[0 1 0 0] 0.25", "[0 0 -1 0] 0.25") } else { ("[1 0 0 0] 0.25", "[0 0 -1 0] 0.25") };
@@ -75,18 +88,23 @@ impl Vmf {
 
     /// An axis-aligned box: centre and half sizes (m).
     fn cuboid(&mut self, c: V, h: V, material: &str) {
-        let planes: Vec<(V, V)> = (0..3)
+        self.cuboid_top(c, h, material, material);
+    }
+
+    /// An axis-aligned box whose top is of `top` and its other sides of `rest`.
+    fn cuboid_top(&mut self, c: V, h: V, top: &str, rest: &str) {
+        let planes: Vec<(V, V, &str)> = (0..3)
             .flat_map(|k| {
                 [-1.0f32, 1.0].map(|s| {
                     let mut p = c;
                     p[k] += s * h[k];
                     let mut n = [0.0; 3];
                     n[k] = s;
-                    (p, n)
+                    (p, n, if k == 2 && s > 0.0 { top } else { rest })
                 })
             })
             .collect();
-        self.brush(&planes, material);
+        self.brush_sides(&planes);
     }
 }
 
@@ -112,13 +130,34 @@ fn sites() -> Vec<(&'static str, V)> {
 fn vmf() -> String {
     let mut w = Vmf { text: String::new(), id: 1 };
     let half_x = sites().len() as f32 * SPACING / 2.0 + 10.0;
-    // The floor, its top at z 0, and the sky's box around it all.
-    w.cuboid([0.0, 0.0, -0.5], [half_x, FLOOR_HALF_Y, 0.5], CONCRETE);
+    // The floor, its top at z 0 and down to the sky's floor, in strips along X round the pools' holes (x from, x to,
+    // y from, y to: m).
+    let pools: Vec<[f32; 4]> = sites()
+        .into_iter()
+        .filter(|s| stage::stage(s.0).is_some_and(|s| s.pool))
+        .map(|(_, at)| [at[0] + dms_game::POOL[0][0], at[0] + dms_game::POOL[1][0], dms_game::POOL[0][1], dms_game::POOL[1][1]])
+        .collect();
+    let mut x0 = -half_x;
+    for p in pools.iter().copied().chain([[half_x, half_x, 0.0, 0.0]]) {
+        let strip = |w: &mut Vmf, a: f32, b: f32, y0: f32, y1: f32| {
+            w.cuboid([(a + b) / 2.0, (y0 + y1) / 2.0, SKY_BOTTOM / 2.0], [(b - a) / 2.0, (y1 - y0) / 2.0, -SKY_BOTTOM / 2.0], CONCRETE)
+        };
+        strip(&mut w, x0, p[0], -FLOOR_HALF_Y, FLOOR_HALF_Y);
+        if p[1] > p[0] {
+            strip(&mut w, p[0], p[1], -FLOOR_HALF_Y, p[2]);
+            strip(&mut w, p[0], p[1], p[3], FLOOR_HALF_Y);
+            // The water, from the pool's bottom to its surface.
+            let (z0, z1) = (-stage::POOL_DEEP, stage::WATER + SHELL);
+            w.cuboid_top([(p[0] + p[1]) / 2.0, (p[2] + p[3]) / 2.0, (z0 + z1) / 2.0], [(p[1] - p[0]) / 2.0, (p[3] - p[2]) / 2.0, (z1 - z0) / 2.0], WATER, NODRAW);
+        }
+        x0 = p[1];
+    }
+    // The sky's box around it all.
     let (hx, hy, top) = (half_x + WALL, FLOOR_HALF_Y + WALL, SKY_TOP);
-    w.cuboid([0.0, 0.0, -1.0 - WALL / 2.0], [hx + WALL, hy + WALL, WALL / 2.0], SKY);
+    w.cuboid([0.0, 0.0, SKY_BOTTOM - WALL / 2.0], [hx + WALL, hy + WALL, WALL / 2.0], SKY);
     w.cuboid([0.0, 0.0, top + WALL / 2.0], [hx + WALL, hy + WALL, WALL / 2.0], SKY);
-    let mid = (top - 1.0) / 2.0;
-    let h = (top + 1.0) / 2.0;
+    let mid = (top + SKY_BOTTOM) / 2.0;
+    let h = (top - SKY_BOTTOM) / 2.0;
     w.cuboid([-hx, 0.0, mid], [WALL / 2.0, hy + WALL, h], SKY);
     w.cuboid([hx, 0.0, mid], [WALL / 2.0, hy + WALL, h], SKY);
     w.cuboid([0.0, -hy, mid], [hx, WALL / 2.0, h], SKY);
