@@ -311,11 +311,12 @@ without them Homer fell in ~2 s.
 - [x] The fork's fixes (ADR 0017, `VBOX3D_NM_003` without changing the interface): armature (`Cdot0` once a sub-step, 8
       Gauss–Seidel passes over the joints with armature), the step's starting velocity in `GetBodyState`, continuous
       gravity for NM bodies. `golden body` passes.
-- [ ] Known divergences (the plan is the next step in the physics, ADR 0017): `relax-1s` outside tolerance (the
+- [x] Known divergences (the plan is the next step in the physics, ADR 0017): `relax-1s` outside tolerance (the
       supporting foot sinks 2–4 cm into Box3D's soft contact under the impact load); Box3D's floor 6.35 mm above the
       BSP; the shot: M6.
       → M5 (ADR 0018): the floor is taken into account; the cause of `relax-1s` refined: the joints stretching, not
       the contact.
+      → Left as known divergences (the user's decision, 2026-11-03): see M5's item.
 
 **DoD:** standing under `bodyBalance` 60 s, a push, `catchFall`, `relax`, the first 60 steps of a shot within the
 scenario's tolerances; `relax-1s` outside tolerance, the cause and the plan in ADR 0017; 4 Homers at once: 67 ticks/s
@@ -351,7 +352,7 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       `server.ps1 start -Map dms_stages`): `kerb`, `rooftop`, `lowwall`, `stairs`; the `said=` check (the room layer's
       reactions). Within tolerance: `kerb`, all the earlier scenarios except `relax-1s`, for `rooftop` the reactions
       and the fall (except the pose after landing).
-- [ ] Known divergences (ADR 0018): `relax-1s` (0.77 s against 1.00) isn't the soft contact but Box3D's joints
+- [x] Known divergences (ADR 0018): `relax-1s` (0.77 s against 1.00) isn't the soft contact but Box3D's joints
       stretching under the weight (the ankle 6–10 mm; the fork's extra passes don't include the feet's contacts);
       `lowwall`, `stairs` and the `rooftop` landing are a chaotic amplification of the same stance divergence (2 cm
       before the push). The plan: NM bodies' contacts in the fork's extra Gauss–Seidel passes.
@@ -360,6 +361,17 @@ contact materials (`VBOX3D_NM_004`) and the stiffness of NM's joints.
       left is the springiness of Box3D's soft joint `F / (m_eff · ω²)` (~5 mm standing); because of it `relax-1s` (now
       after 1.00 s), `kerb`'s pose, `lowwall` (close) and the `rooftop` landing are outside tolerance for now; the plan
       is NM joints' stiffness above the ¼ ceiling.
+      → Measured again on the bench (2026-11-03) and **left as they are (the user's decision)**: NM's own physics is
+      articulated (reduced coordinates, `delirium` `artic.rs`), its pivots never part; Box3D's soft joints stretch,
+      and the chaotic scenarios amplify those millimetres one way or the other, so no small change of the fork closes
+      all three. Now (4 sub-steps): the ankle's gap standing 4.8 mm mean / 7.5 max, `stand-1s` COM max 0.040 m,
+      `relax-1s` never below 0.85 m in its 60 steps (Playroom 1.00 s), `kerb` below 0.5 m at 3.4–4.8 s (Playroom 2.98,
+      tolerance 0.25) ending 0.39–0.49 m (0.208), `lowwall` 0.101 / 0.054 m, `rooftop` and `stairs` within; `kerb` is
+      the same on main's fork and the old map (3.27–4.78 s). Tried, not taken: 8 sub-steps (the whole world's): ankle
+      1.2 mm, `stand-1s` 0.022 m, `kerb`'s end within (0.217 m) but below 0.5 m at 3.97 s, `lowwall` 0.100 / 0.057,
+      `relax-1s` early (0.72 s ×3), male_07's `push` 0.057 (M10), the physics step with 8 Homers 11.3 → 16.2 ms;
+      NM joints alone at ½ the sub-step rate (ADR 0019): worse stages. Not tried, larger: projecting NM joints' pivots
+      after the step (1–2 days, fights the feet's contacts); an articulated solver for NM bodies in the fork (weeks).
 
 **DoD:** golden scenarios on the Playroom's stages (`--stage`: stairs, a wall, a ledge) match the Playroom on the same
 geometry built in GMod; NM's contacts (`nm_agent_get_part_contact`) match the touches in Box3D.
