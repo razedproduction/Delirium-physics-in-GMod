@@ -19,7 +19,7 @@ dms_selftest
 ```
 
 `dms_game_dir` is saved (`FCVAR_ARCHIVE`). While it's empty, DMS takes the folder from `garrysmod\data\dms\game_dir.txt`,
-which the release's `install.ps1 -Gta` writes (the path only). The data loads once a run: Delirium keeps the character
+which the release's `install.bat` writes (the path only). The data loads once a run: Delirium keeps the character
 in global state, so to change the folder, restart Garry's Mod.
 
 What's read:

@@ -1,0 +1,2 @@
+# cmd finds labels wrongly in a .bat with LF line ends.
+*.bat text eol=crlf

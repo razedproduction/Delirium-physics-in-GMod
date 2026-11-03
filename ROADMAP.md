@@ -730,6 +730,14 @@ or `--shoot pistol` checks each body against LEAD with the same blow: Homer stan
 tolerances, `drunk` and `relax-1s` out as on the base; the shot's move (0033) is to be checked on the bench with
 `shot`, `shotgun` and `death`.
 
+### Release 0.2.0
+
+- [x] Version 0.2.0 (`Cargo.toml`, `DMS_ADDON_VERSION`); `MODEL_VERSION` stays 1 (what `dms-homer` writes for Homer
+      hasn't changed since 0.1.0).
+- [x] The Lua addon only from the Workshop (id 3829811829, published by the user from `addon\`), the player's installer
+      `install.bat` instead of `install.ps1` (ADR 0035); `docs/install.md`, `docs/release-notes-0.2.0.md`. Publishing
+      (the tag, the GitHub release, the Workshop update) waits for the user.
+
 ### Deferred: Playroom features not needed for Homer's behaviour
 
 Not carried over (it's the Playroom application, not the body's behaviour): Hero mode, the weapon panel and the floating

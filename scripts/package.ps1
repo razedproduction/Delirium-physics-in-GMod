@@ -3,8 +3,9 @@
 #   .\scripts\package.ps1             build (module, dms-homer, the fork) and pack
 #   .\scripts\package.ps1 -NoBuild    pack what's built
 #
-# The version is Cargo.toml's (workspace.package); the Lua addon's DMS_ADDON_VERSION has to be the same. Nothing of
-# GTA IV goes in (docs/adr/0006): Homer's model is made on the player's machine by dms-homer.
+# The version is Cargo.toml's (workspace.package); the Lua addon's DMS_ADDON_VERSION has to be the same (the addon is
+# the Workshop's, published from addon\: docs/adr/0035). Nothing of GTA IV goes in (docs/adr/0006): Homer's model is
+# made on the player's machine by dms-homer.
 
 param(
 	[switch]$NoBuild
@@ -77,8 +78,12 @@ $stage = Join-Path $root "dist\$name"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -Confirm:$false }
 New-Item -ItemType Directory -Force (Join-Path $stage 'bin'), (Join-Path $stage 'licenses') | Out-Null
 foreach ($b in $bins.GetEnumerator()) { Copy-Item $b.Value (Join-Path $stage "bin\$($b.Key)") }
-Copy-Item (Join-Path $root 'addon') (Join-Path $stage 'addon') -Recurse
-Copy-Item (Join-Path $PSScriptRoot 'release\install.ps1') $stage
+# The Lua addon isn't packed: it's the Workshop's (docs/adr/0035), published from addon\ by hand. The installer is a
+# .bat with its version put in, in CRLF (cmd finds labels wrongly in an LF file) and ASCII.
+$bat = (Get-Content (Join-Path $PSScriptRoot 'release\install.bat') -Raw) -replace '\r?\n', "`r`n"
+if ($bat -notmatch '@VERSION@') { throw 'install.bat has no @VERSION@' }
+if ($bat -match '[^\x00-\x7F]') { throw 'install.bat has to be ASCII' }
+[IO.File]::WriteAllText((Join-Path $stage 'install.bat'), $bat.Replace('@VERSION@', $version), [Text.Encoding]::ASCII)
 Copy-Item (Join-Path $root 'docs\install.md') $stage
 Copy-Item (Join-Path $root 'LICENSE') $stage
 Copy-Item (Join-Path $root 'THIRD_PARTY.md') $stage
@@ -98,7 +103,7 @@ foreach ($l in $licences.GetEnumerator()) {
 	if (-not (Test-Path $from)) { throw "$from not found (git submodule update --init?)" }
 	Copy-Item $from (Join-Path $stage "licenses\$($l.Key)")
 }
-# What the player runs: no development leftovers (the bench's settings, golden data) can be in addon\.
+# What the player runs: no development leftovers (the bench's settings, golden data).
 $extra = Get-ChildItem $stage -Recurse -File | Where-Object { $_.Name -match '(?i)bench\.txt|\.rec$|game_dir' }
 if ($extra) { throw "not for a release: $($extra.FullName -join ', ')" }
 

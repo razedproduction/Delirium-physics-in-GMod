@@ -6,7 +6,7 @@ local gameDir = CreateConVar("dms_game_dir", "", FCVAR_ARCHIVE + FCVAR_PROTECTED
 
 local say = DMS_Say
 
--- The GTA IV folder: dms_game_dir, else the one install.ps1 -Gta wrote to data/dms/game_dir.txt (a path only, no
+-- The GTA IV folder: dms_game_dir, else the one install.bat wrote to data/dms/game_dir.txt (a path only, no
 -- game files: docs/adr/0006, 0010). "" when there's neither.
 function DMS_GameDir()
 	local dir = gameDir:GetString()

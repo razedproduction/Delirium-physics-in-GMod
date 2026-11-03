@@ -7,7 +7,7 @@ AddCSLuaFile("dms/cl_ragdolls.lua")
 AddCSLuaFile("dms/cl_rig_view.lua")
 
 -- This addon's release: the module has to be the same one (scripts\package.ps1 checks both are Cargo.toml's).
-DMS_ADDON_VERSION = "0.1.0"
+DMS_ADDON_VERSION = "0.2.0"
 -- The IPhysicsNM the module binds Homer with (docs/adr/0018), and the one GMod's ragdolls need (docs/adr/0027).
 local INTERFACE, INTERFACE_RAGDOLLS = 4, 6
 
@@ -32,8 +32,8 @@ if not DMS then require("dms") end
 
 -- The module and this Lua from different releases: their natives and tables needn't match, so nothing runs.
 if DMS.Version ~= DMS_ADDON_VERSION then
-	local message = string.format("[DMS] gmsv_dms_win64.dll is %s but the Lua addon is %s: DMS is disabled, install "
-		.. "both from one release (DMS-<version>-win64.zip, install.ps1)", tostring(DMS.Version), DMS_ADDON_VERSION)
+	local message = string.format("[DMS] gmsv_dms_win64.dll is %s but the Lua addon is %s: DMS is disabled: the "
+		.. "Workshop's addon and DMS-<version>-win64.zip (install.bat) have to be the same release", tostring(DMS.Version), DMS_ADDON_VERSION)
 	ErrorNoHalt(message .. "\n")
 	tellSuperadmins("DMS_Version", { message })
 	return
@@ -89,26 +89,26 @@ function DMS_Problems()
 	if not iface then
 		-- docs/adr/0005: without IPhysicsNM nothing runs.
 		out[#out + 1] = "vphysics.dll isn't VPhysics-Box3D (no IPhysicsNM): DMS is disabled. Steam's file check puts "
-			.. "the original back: reinstall the fork (install.ps1)"
+			.. "the original back: reinstall the fork (install.bat)"
 	else
 		local n = tonumber(iface:match("(%d+)$")) or 0
 		if n < INTERFACE_RAGDOLLS then
 			out[#out + 1] = string.format("vphysics.dll is an older VPhysics-Box3D (%s, DMS needs VBOX3D_NM_%03d%s): reinstall "
-				.. "the fork from this release (install.ps1)", iface, INTERFACE_RAGDOLLS,
+				.. "the fork from this release (install.bat)", iface, INTERFACE_RAGDOLLS,
 				n >= INTERFACE and "; Homer works, GMod's ragdolls don't" or "")
 		end
 	end
 	if not util.IsValidModel(DMS_HOMER_MODEL) then
-		out[#out + 1] = DMS_HOMER_MODEL .. " isn't there: make it with dms-homer from your GTA IV (install.ps1 -Gta)"
+		out[#out + 1] = DMS_HOMER_MODEL .. " isn't there: make it with dms-homer from your GTA IV (install.bat)"
 	else
 		local made = DMS_HomerModelVersion()
 		if made ~= DMS.HomerModelVersion then
 			out[#out + 1] = string.format("%s was made by an older dms-homer (model %s, this release needs %d): make it "
-				.. "again (install.ps1 -Gta)", DMS_HOMER_MODEL, made and tostring(made) or "unmarked", DMS.HomerModelVersion)
+				.. "again (install.bat, Homer's model)", DMS_HOMER_MODEL, made and tostring(made) or "unmarked", DMS.HomerModelVersion)
 		end
 	end
 	if DMS_GameDir() == "" then
-		out[#out + 1] = "No GTA IV folder for NM's data: dms_game_dir \"<your GTA IV folder>\" (or install.ps1 -Gta)"
+		out[#out + 1] = "No GTA IV folder for NM's data: dms_game_dir \"<your GTA IV folder>\" (or install.bat, Homer's model)"
 	end
 	return out
 end

@@ -65,7 +65,8 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 - GMod: `E:\Games\Steam\steamapps\common\GarrysMod` (x86-64 ветка, форк `vphysics.dll` уже в `bin\win64`,
   оригинал — `vphysics.dll.original`). После сборки устанавливать в игру самому, не спрашивая.
 - В PowerShell не запускать `build.ps1` с `2>&1`: вывод cargo в stderr превращается в ошибку.
-- Релиз (ADR 0024): `.\scripts\package.ps1` → `dist\DMS-<версия>-win64.zip`. Версия — `Cargo.toml`
+- Релиз (ADR 0024, 0035): `.\scripts\package.ps1` → `dist\DMS-<версия>-win64.zip` (без Lua: аддон — в Workshop,
+  id 3829811829, его обновляет пользователь; установщик игрока — `scripts\release\install.bat`). Версия — `Cargo.toml`
   (`workspace.package`) и `DMS_ADDON_VERSION` в `dms_init.lua`, одинаковые; изменилось то, что пишет `dms-homer`, —
   `dms_game::MODEL_VERSION` + 1. CRT линкуется статически (`.cargo\config.toml`). Публикация — только с разрешения
   пользователя.
