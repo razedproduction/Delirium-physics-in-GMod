@@ -138,14 +138,33 @@ What remains, and why it stays:
 ## Simulate
 
 The fitted body made by the fork as the module makes it (`CreateBody`, `CreateJoint`, NM's pivots, frames, limits,
-inertia, materials and self-collision pairs) on a concrete floor, without NM: *Stand*, *Drop*, *Throw*, *Kick*, and
-drag any part with the left button. Gravity is NM's 9.8 m/s² (what the body feels in the game under NM) or Source's
-600 units/s². The model's mesh follows the parts as the game poses it. NM itself in the editor is a later step.
+inertia, materials and self-collision pairs) on a concrete floor: *Stand*, *Drop*, *Throw*, *Kick* (every part given
+3 m/s sideways and a spin), and drag any part with the left button. Gravity is NM's 9.8 m/s² (what the body feels in
+the game under NM) or Source's 600 units/s². The model's mesh follows the parts as the game poses it; *Homer's own
+body* simulates golden's body instead of the fit.
+
+**NM: bodyBalance** stands the body and puts NM on it as the module's agents drive one ([ADR 0032](adr/0032-nm-in-rig-editor.md)):
+the Playroom's agent in FOLLOW, stepped from the environment's step callback (1/60 s NM steps over the 0.015 s physics
+steps), its drives, armature, balancer impulses and gravity's compensation on the bodies, all of it the module's own
+code (`dms_vphysics::follow`), with the Playroom's balance button pressed (`bodyBalance start=true`). *Push* is the
+Playroom's poke: an impulse into the spine (part 9) away from the view, 8 N s by default; dragging a part is the
+Playroom's grab. The panel shows whether he's balancing or fallen, NM's messages and feedback, and why NM came off
+(a blow-up or a state that isn't finite). The Playroom room's reactions round the agent (its tasks, get-ups,
+`in_air`, the additional reactions) are the module's and aren't in the editor.
+
+`--snap-report <models> --sim 600 --nm balance [--push <N s>]` does it for each model: stood under bodyBalance,
+pushed halfway (8 N s by default), and the same build in LEAD (NM's own physics) for comparison; `homer` among the
+texts adds Homer's own body. A fault is a pelvis below 0.8 of its standing height (or NM coming off). With 600 steps
+and a 40 N s push: Homer and `humans/group01/male_07` stand and take it (male_07 steps 0.43 m); `kleiner`, `alyx` and
+`combine_soldier` go down after 1.2–2.1 s though they stand in LEAD (a difference of the fork's physics from NM's on
+those bodies, the fork's to fix); every plain fit goes down.
 
 ## For scripts
 
 `--classify <text>` prints the class of every model whose path or source contains the text (no window);
 `--bones <model>` its bones; `--select <part>` and `--tool <name>` set the view up (with a screenshot, the view frames
 the selected part), `--yaw <degrees>` turns it round the model, `--snap` snaps all the parts at once;
-`--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many physics steps) and quits;
+`--screenshot <file.png> [--sim <steps>]` saves the window once drawn (after that many physics steps) and quits; with
+`--nm balance` the body is stood under NM's bodyBalance instead of dropped, `--push <N s>` pokes it halfway, and
+`--homer` simulates Homer's own body;
 `--snap-report` scores Snap ([Snap](#snap)).

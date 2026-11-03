@@ -14,6 +14,9 @@
 //!   3. `Agent::step_follow`; feedback; the drives (`doll.out`, gravity left out) and armature (`doll.armature`).
 //! Every Source step then gets the latest drives, the impulses of `applyImpulse` and gravity's compensation
 //! (docs/adr/0007) through `ApplyBodyDrive`.
+//!
+//! The step's pieces that only touch the crate are `dms_vphysics::follow`'s, shared with the rig editor's agent
+//! (docs/adr/0032).
 
 use std::collections::VecDeque;
 use std::fmt::Write;
@@ -23,7 +26,8 @@ use delirium::collision::Collision;
 use delirium::msg::{self, Kind, Value};
 use delirium::nm::Agent;
 use delirium::prelude::*;
-use delirium::ragdoll::{GRAVITY, Obstacle, Ragdoll};
+use delirium::ragdoll::Obstacle;
+use dms_vphysics::follow::{self as core, POKE, impulse_params, parse_value, v3};
 
 use crate::data::Data;
 use crate::ffi::vphysics_nm::{IPhysicsConstraint, IPhysicsObject, Nm, PhysicsNMBodyState};
@@ -32,25 +36,16 @@ use crate::tuning;
 mod room;
 pub use room::{BUTTONS, EXTRA, GETUP_MODES, React, Settings, WEAPONS, apply_switch, set_settings, settings, weapon};
 
-pub const PARTS: usize = 21;
-/// NM's own step.
-pub const DT: f64 = 1.0 / 60.0;
-/// The Playroom's agents' seed (`Agent::new(.., 0.3)`).
-const SEED: f32 = 0.3;
+pub use core::{DT, PARTS, button_lines};
 const HEAD: usize = 12;
 /// NM steps one Source step may run at most (a hitch, `host_timescale`): the rest of the time is dropped, as the
 /// Playroom's window drops what's past its 4 steps a frame.
 const MAX_STEPS: u32 = 4;
-/// The Playroom's camera, which `!poke` pushes away from (`Sim::eye` as the window starts), and its poke (N s).
+/// The Playroom's camera, which `!poke` pushes away from (`Sim::eye` as the window starts).
 const EYE: Vec3 = Vec3::new(0.0, -4.0, 1.5);
-const POKE: f32 = 8.0;
 /// The Playroom's headless shot (`headless`).
 const HEADLESS_SHOT_STEP: u64 = 60;
 pub const REC_HEADER: &str = "# game: frame t pelvis xyz |v| touches | ours: t com xyz |v|   (# lines: the log)";
-/// Past these a part has blown up (m/s, rad/s): NM's physics caps a part at 80 m/s (`ragdoll::MAX_SPEED`), and no
-/// motion of a body turns a part at 300 rad/s.
-const MAX_SPEED: f32 = 80.0;
-const MAX_SPIN: f32 = 300.0;
 /// How long `hybrid` takes to turn the compensation on or off (s, docs/adr/0007).
 const BLEND: f32 = 0.1;
 /// The pelvis further than this (m) from where its last state carried it, plus twice the way it went: it was
@@ -108,65 +103,6 @@ pub struct Park {
     settle: f32,
 }
 
-/// The Playroom's buttons that only send message lines (`Sim::lines`), the ones the bench presses.
-pub fn button_lines(b: &str) -> Option<&'static [&'static str]> {
-    Some(match b {
-        "balance" => &["bodyBalance start=true"],
-        "windmill" => &["bodyBalance start=true", "armsWindmillAdaptive start=true"],
-        "pedal" => &["pedalLegs start=true"],
-        "writhe" => &["bodyWrithe start=true"],
-        "rollup" => &["bodyRollUp start=true"],
-        "catchfall" => &["catchFall start=true"],
-        "highfall" => &["highFall start=true"],
-        "stairs" => &["rollDownStairs start=true"],
-        "relax" => &["bodyRelax start=true"],
-        "stayup" => &["stayUpright start=true stiffness=3"],
-        "foetal" => &["bodyFoetal start=true"],
-        "STOP all" => &["stopAllBehaviours"],
-        _ => return None,
-    })
-}
-
-/// The Playroom's `v3`: a vector in a message line.
-fn v3(v: Vec3) -> String {
-    format!("{:.3},{:.3},{:.3}", v.x, v.y, v.z)
-}
-
-/// The Playroom's `parse`: a param's text as a value of its kind.
-fn parse_value(kind: Kind, v: &str) -> Option<Value> {
-    Some(match kind {
-        Kind::Float => Value::Float(v.parse().ok()?),
-        Kind::Int => Value::Int(v.parse().ok()?),
-        Kind::Bool => Value::Bool(match v {
-            "true" | "1" => true,
-            "false" | "0" => false,
-            _ => return None,
-        }),
-        Kind::Vec3 => {
-            let f: Vec<f32> = v.split(',').map(|x| x.parse().ok()).collect::<Option<_>>()?;
-            Value::Vec3(Vec3::new(*f.first()?, *f.get(1)?, *f.get(2)?))
-        }
-        Kind::Str => Value::Str(v.to_string()),
-    })
-}
-
-/// `applyImpulse`'s part, impulse, hit point and equalising from its params, the message's defaults for the rest
-/// (as `msg::send` takes them: an int or a float for the part, a float or an int for the amount).
-fn impulse_params(ps: &[(&str, Value)]) -> (usize, Vec3, Option<Vec3>, f32) {
-    let get = |n: &str| ps.iter().find(|(p, _)| *p == n).map(|(_, v)| v.clone()).or_else(|| msg::get(&msg::State::default(), "applyImpulse", n));
-    let num = |v: Option<Value>| match v {
-        Some(Value::Float(x)) => Some(x),
-        Some(Value::Int(i)) => Some(i as f32),
-        _ => None,
-    };
-    let vec = |v: Option<Value>| match v {
-        Some(Value::Vec3(v)) => Some(v),
-        _ => None,
-    };
-    let part = num(get("partIndex")).unwrap_or(0.0).max(0.0) as usize;
-    let hit = ps.iter().any(|(p, _)| *p == "hitPoint").then(|| vec(get("hitPoint"))).flatten();
-    (part.min(PARTS - 1), vec(get("impulse")).unwrap_or(Vec3::ZERO), hit, num(get("equalizeAmount")).unwrap_or(0.0))
-}
 
 /// A scenario running on this agent (the bench, `dms-ctl run`): its commands by NM step, as the Playroom ran them
 /// (golden/README.md, docs/adr/0011), and its record in the Playroom's `--rec` format.
@@ -230,10 +166,6 @@ impl BodyDef {
         Arc::new(BodyDef { build: d.homer.clone(), body: d.body.clone(), fitted: false })
     }
 }
-
-/// The Playroom's grab (`pull`): its spring and its cap (N s a step at 60 steps a second).
-const PULL_K: f32 = 1500.0;
-const PULL_MAX: f32 = 1500.0;
 
 pub struct Follower {
     pub id: u32,
@@ -400,9 +332,8 @@ impl Follower {
         frames: &[Transform],
         lead: bool,
     ) -> Follower {
-        // As the Playroom makes its agents (`Agent::new(build, Ragdoll::new(build, frames, 0), facing, 0.3)`).
-        let doll = Ragdoll::new(&def.build, frames, Vec3::ZERO);
-        let agent = Agent::new(&def.build, doll, Quat::from_rotation_z(yaw), SEED);
+        // As the Playroom makes its agents.
+        let agent = core::agent(&def.build, frames, yaw);
         // The Playroom's `face`: his standing forward (from his thighs) in the head capsule's frame.
         let cap0 = frames[HEAD].rotation * delirium::nmdbm::rage_link(dms_game::HOMER_NM, HEAD);
         let axis = if (cap0 * Vec3::Y).z < 0.0 { -Vec3::Y } else { Vec3::Y };
@@ -721,8 +652,7 @@ impl Follower {
         }
         self.follow_teleport(events);
         self.keep_world();
-        let (mode, asleep) = (self.agent.doll.mode, self.agent.doll.asleep);
-        let mut moved = (0.0f32, 0.0f32, 0.0f32);
+        let sleep = (self.agent.doll.mode, self.agent.doll.asleep);
         if let Some(lines) = self.respawn.take() {
             // The Playroom's new agent on the get-up's last pose (`Agent::new(.., Quat::IDENTITY, 0.3)`: its room's
             // facing, here the one he was given), its messages' state new too.
@@ -734,29 +664,13 @@ impl Follower {
                     .map(|s| Transform::from_translation(Vec3::from_array(s.position) - self.origin).with_rotation(Quat::from_array(s.rotation).normalize()))
                     .collect()
             };
-            self.agent = Agent::new(&self.def.build, Ragdoll::new(&self.def.build, &frames, Vec3::ZERO), Quat::from_rotation_z(self.yaw), SEED);
+            self.agent = core::agent(&self.def.build, &frames, self.yaw);
             self.msgs = msg::State::default();
             (self.predicted, self.before) = (vec![], vec![]);
             self.queued.extend(lines);
         }
         // In LEAD the doll is NM's own body: nothing to read.
-        for k in (0..PARTS).filter(|_| !self.lead) {
-            let s = self.snap[k];
-            let (x, q) = (Vec3::from_array(s.position) - self.origin, Quat::from_array(s.rotation));
-            let (v, w) = (Vec3::from_array(s.velocity), Vec3::from_array(s.angular_velocity));
-            if !(x.is_finite() && q.is_finite() && v.is_finite() && w.is_finite()) || q.length_squared() < 0.5 {
-                return Err(format!("part {k}'s state isn't finite"));
-            }
-            // A blow-up is as bad as a NaN: faster than NM's own physics ever lets a part go.
-            if v.length() > MAX_SPEED || w.length() > MAX_SPIN {
-                return Err(format!("part {k} blew up ({:.0} m/s, {:.0} rad/s)", v.length(), w.length()));
-            }
-            if k == 0 {
-                (moved.0, moved.1) = (v.length_squared(), w.length_squared());
-            }
-            moved.2 += (v.length_squared() + w.length_squared()) / PARTS as f32;
-            self.agent.doll.set_body(k, x, q, v, w);
-        }
+        let moved = if self.lead { (0.0, 0.0, 0.0) } else { core::set_state(&mut self.agent.doll, &self.snap, self.origin)? };
         // NM's prediction, scaled to the physics time that went by, against what Box3D did.
         if self.predicted.len() == PARTS && self.since > 0.0 {
             let s = (self.since / DT) as f32;
@@ -772,11 +686,8 @@ impl Follower {
         self.before = (0..PARTS).map(|k| self.agent.doll.motion(k)).collect();
         self.limit_use = self.limit_use();
         self.pivot_gap = self.pivot_gap();
-        // `set_body` wakes the doll; the Playroom's only wakes when it moves (`Ragdoll::sleep`'s tolerances).
-        let [v2, w2, mean2] = self.agent.doll.sleep_tol;
-        if self.lead || moved.0 <= v2 && moved.1 <= w2 && moved.2 <= mean2 {
-            (self.agent.doll.mode, self.agent.doll.asleep) = (mode, asleep);
-        }
+        // `set_body` wakes the doll; the Playroom's only wakes when it moves.
+        core::keep_sleep(&mut self.agent.doll, sleep, moved);
         // A finished scenario's agent goes on as any other; its record is complete.
         if self.script.as_ref().is_some_and(|s| !s.done) {
             self.script_step();
@@ -796,15 +707,8 @@ impl Follower {
         self.stairs_frame();
         // The record's line of the step about to run: by the same token, the state the step starts from.
         let line = self.script.as_ref().filter(|s| !s.done).map(|_| self.rec_line(self.steps + 1));
-        // NM's balancer steadies the body with impulses (`nmdbm::stabilise` while `bodyBalance` runs: the feet one
-        // way, the pelvis the other), which its step hands to its own physics (`doll.impulse`), not to `doll.out`:
-        // in FOLLOW they'd be lost. The same function on the same state (the step's, before it runs) gives them;
-        // they're linear in its gain squared, which the step itself sets (`Character::stabilise`).
-        let unit = self.agent.character().filter(|_| !self.lead).map(|ch| {
-            let frames: Vec<Transform> = self.agent.doll.frames().collect();
-            let body = delirium::nmdbm::Body { ch, build: &self.def.build, doll: &self.agent.doll, frames: &frames };
-            delirium::nmdbm::stabilise(&body, 1.0, dt)
-        });
+        // NM's balancer's impulses, which its step hands to its own physics: in FOLLOW they go on the bodies.
+        let unit = if self.lead { None } else { core::balancer_unit(&self.agent, &self.def.build, dt) };
         if self.lead {
             // NM's own physics steps the doll (impulses, the balancer's included, solved in it), as the Playroom's.
             self.agent.step(&self.def.build, &self.world, dt, &self.obstacles, &[]);
@@ -812,11 +716,7 @@ impl Follower {
             self.agent.step_follow(&self.def.build, &self.world, dt, &self.obstacles, &[]);
         }
         self.steps += 1;
-        if let (Some(unit), Some((gain, _))) = (unit, self.agent.character().and_then(|ch| ch.stabilise)) {
-            for (k, j) in unit.into_iter().enumerate().filter(|(_, j)| *j != Vec3::ZERO) {
-                self.kicks.push((k, Vec3::ZERO, j * (gain * gain)));
-            }
-        }
+        self.kicks.extend(core::balancer_kicks(&self.agent, unit));
         self.predicted = (0..PARTS).map(|k| self.agent.doll.motion(k)).collect();
         if let (Some(line), Some(s)) = (line, self.script.as_mut()) {
             s.rec.push_str(&line);
@@ -837,19 +737,8 @@ impl Follower {
             self.was_fallen = self.agent.fallen;
             events.push(Event { id: self.id, kind: if self.agent.fallen { "fallen" } else { "up" }, text: String::new(), value: 0.0 });
         }
-        let doll = &self.agent.doll;
-        if doll.out.len() < PARTS || doll.out.iter().any(|(f, t)| !(f.is_finite() && t.is_finite())) {
-            return Err("NM's drives aren't finite".into());
-        }
-        self.drives.copy_from_slice(&doll.out[..PARTS]);
-        for k in 1..PARTS {
-            let a = doll.armature.get(k).copied().unwrap_or(0.0);
-            if !(a.is_finite() && a >= 0.0) {
-                return Err(format!("joint {k}'s armature isn't finite"));
-            }
-            // Set on the joint in `finish`.
-            self.armature[k] = a;
-        }
+        // The armature is set on the joints in `finish`.
+        core::outputs(&self.agent.doll, &mut self.drives, &mut self.armature)?;
         if self.asleep() != self.bodies_asleep {
             self.bodies_asleep = self.asleep();
             events.push(Event { id: self.id, kind: if self.bodies_asleep { "sleep" } else { "wake" }, text: String::new(), value: 0.0 });
@@ -877,17 +766,7 @@ impl Follower {
             self.kicks.clear();
             return;
         }
-        let g_nm = Vec3::NEG_Z * GRAVITY;
-        let mut forces: Vec<(Vec3, Vec3)> = if self.asleep() { vec![(Vec3::ZERO, Vec3::ZERO); PARTS] } else { self.drives.clone() };
-        for (k, f) in forces.iter_mut().enumerate().filter(|_| !self.asleep()) {
-            let g = if self.gravity_off >> k & 1 != 0 { Vec3::ZERO } else { g_src };
-            f.0 += (g_nm - g) * (self.agent.doll.part_mass(k) * self.comp);
-        }
-        for (k, arm, j) in self.kicks.drain(..) {
-            let f = j / timestep;
-            forces[k].0 += f;
-            forces[k].1 += arm.cross(f);
-        }
+        let forces = core::forces(&self.agent.doll, &self.drives, self.asleep(), self.comp, g_src, self.gravity_off, self.kicks.drain(..), timestep);
         for (&o, (f, t)) in self.objects.iter().zip(&forces) {
             // SAFETY: a live object; the vectors are finite (checked as they came).
             unsafe { nm.apply_body_drive(o, Some(&f.to_array()), Some(&t.to_array())) };
@@ -972,21 +851,14 @@ impl Follower {
 
     /// The Playroom's `send_to` (Homer's): a message line, parsed as its console does, through `msg::send`.
     pub fn send(&mut self, line: &str) {
-        let mut w = line.split_whitespace();
-        let Some(name) = w.next() else { return };
-        let Some(m) = msg::find(name) else { return self.say(&format!("no message {name}")) };
+        let (m, mut ps) = match core::parse_line(line) {
+            None => return,
+            Some(Err(e)) => return self.say(&e),
+            Some(Ok(x)) => x,
+        };
+        let name = m.name;
         // The tuning profile's values for the params the line doesn't give (docs/adr/0009); none for a scenario's.
         let tuned = if self.scripted() { vec![] } else { tuning::params(name) };
-        let mut ps: Vec<(&str, Value)> = vec![];
-        for kv in w {
-            let Some((k, v)) = kv.split_once('=') else { return self.say(&format!("{kv}: want name=value")) };
-            let kind = if k == "start" { Some(Kind::Bool) } else { m.params.iter().find(|p| p.name == k).map(|p| p.kind) };
-            let Some(kind) = kind else { return self.say(&format!("{name} has no param {k}")) };
-            match parse_value(kind, v) {
-                Some(v) => ps.push((k, v)),
-                None => return self.say(&format!("{k}: not a {kind:?}")),
-            }
-        }
         let starts = ps.iter().any(|(k, v)| *k == "start" && matches!(v, Value::Bool(true)));
         for (k, v) in &tuned {
             // On what starts a behaviour, or sets its params: never on the line's own, nor on a stop.
@@ -1019,29 +891,14 @@ impl Follower {
         if self.lead {
             return;
         }
-        let doll = &self.agent.doll;
-        let Some(centre) = doll.frames().nth(k).map(|f| f.translation) else { return };
-        let mean = doll.mass() / PARTS as f32;
-        let s = 1.0 - equalize + equalize * doll.part_mass(k) / mean;
-        let (at, j) = (hit.unwrap_or(centre), impulse * s);
-        if at.is_finite() && j.is_finite() {
-            self.kicks.push((k, at - centre, j));
-        }
+        self.kicks.extend(core::kick(&self.agent.doll, k, impulse, hit, equalize));
     }
 
     /// The Playroom's `pull` (its mouse grab, here the physgun's and the gravity gun's, ROADMAP M10): a spring on the
     /// grabbed point toward the target, as `applyImpulse` each step, damped and capped as there.
     fn pull(&mut self) {
         let Some((part, local, target)) = self.grab else { return };
-        let Some(f) = self.agent.doll.frames().nth(part) else { return };
-        let at = f.translation + f.rotation * local;
-        let (v, w) = self.agent.doll.vel(part);
-        let damp = (2.0 * (PULL_K * self.agent.doll.mass()).sqrt()).min(30.0 * self.agent.doll.part_mass(part));
-        let imp = (PULL_K * (target - at) - damp * (v + w.cross(at - f.translation))).clamp_length_max(PULL_MAX) / 60.0;
-        if !imp.is_finite() {
-            return;
-        }
-        let ps = [("start", Value::Bool(true)), ("partIndex", Value::Int(part as i32)), ("hitPoint", Value::Vec3(at)), ("impulse", Value::Vec3(imp))];
+        let Some(ps) = core::pull_params(&self.agent.doll, part, local, target) else { return };
         let (k, j, hit, equalize) = impulse_params(&ps);
         let _ = msg::send(&mut self.agent, &self.def.build, &self.world, &mut self.msgs, "applyImpulse", &ps);
         self.kick(k, j, hit, equalize);
@@ -1195,7 +1052,7 @@ impl Follower {
     /// in the window, so `dms-ctl` hands over the impulse the Playroom's record shows when it has one.
     fn poke(&mut self, a: &str) {
         let mut w = a.split_whitespace();
-        let k: usize = w.next().and_then(|k| k.parse().ok()).unwrap_or(9).min(PARTS - 1);
+        let k: usize = w.next().and_then(|k| k.parse().ok()).unwrap_or(core::POKE_PART).min(PARTS - 1);
         let Some(at) = self.agent.doll.frames().nth(k).map(|f| f.translation) else { return };
         let given = w.next().and_then(|v| parse_value(Kind::Vec3, v)).and_then(|v| match v {
             Value::Vec3(v) => Some(v),
@@ -1204,7 +1061,7 @@ impl Follower {
         let dir = given.unwrap_or(at - EYE);
         let name = delirium_data::nm_asset::PARTS.get(k).copied().unwrap_or("?");
         self.say(&format!("room  poke {name} ({POKE:.1} N s)"));
-        self.send(&format!("applyImpulse start=true partIndex={k} hitPoint={} impulse={}", v3(at), v3(dir.normalize() * POKE)));
+        self.send(&core::poke_line(k, at, dir, POKE));
     }
 
     /// `- - - - - - - | t com |v| | p<k> x y z n<held> g<gap> [points] | ...` for the two lowest parts, as the

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "\
 usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphysics.dll>] [--model <models/...mdl>]
                 [--select <part>] [--snap] [--tool <select|move|rotate|scale|all>] [--yaw <degrees>]
-                [--screenshot <file.png> [--sim <steps>]]
+                [--screenshot <file.png> [--sim <steps> [--nm <button> [--push <N s>]]]] [--homer]
   the rig editor: a model's NM rig made by the mouse, saved as garrysmod\\data\\dms\\skeletons\\<model>.json
   --gmod      Garry's Mod's folder (default: DMS_GMOD_DIR, else Steam's library from the registry)
   --game      GTA IV's folder (default: DMS_GAME_DIR, else garrysmod\\data\\dms\\game_dir.txt, else golden\\game_dir.txt)
@@ -28,20 +28,26 @@ usage: dms-rig [--gmod <GarrysMod dir>] [--game <GTA IV dir>] [--vphysics <vphys
   --yaw       the view turned round the model at once (degrees; 0: its front)
   --snap      lays every part on the model's bones and mesh at once (Snap all)
   --screenshot  saves the window to a PNG once drawn and quits (with --sim: after that many steps on the fork)
+  --nm        with --sim: the body stood and NM put on it with the Playroom's button (balance: bodyBalance), not dropped
+  --push      with --nm: the Playroom's poke of that many N s into the spine halfway (--snap-report: 8 by default)
+  --homer     simulates Homer's own body (as in golden) instead of the model's fitted one
   --classify <text>  prints the class of every model whose path or source has <text> (\"workshop\": all of its), no window
   --bones <model>    prints a model's bones (index, name, parent, mesh bind position, physics object)
-  --snap-report <text[,text...]> [--plain] [--verbose] [--sim <steps>]
+  --snap-report <text[,text...]> [--plain] [--verbose] [--sim <steps> [--nm balance [--push <N s>]]]
                      snaps every complete humanoid whose path has a <text> and scores its parts against their bones
                      and mesh (docs/rig-editor.md): the faults past the bounds; --plain scores the plain fit instead,
                      --verbose prints every part's scores, --sim drops each body on the fork and checks it settles
-                     whole; exits 1 when any model has faults";
+                     whole (with --nm balance: stands it under NM's bodyBalance, pushes it halfway and checks it
+                     stays up, against NM's own physics; the text \"homer\" adds Homer's own body); exits 1 when any
+                     model has faults";
 
 /// Homer from the player's GTA IV as the module loads him (`module/src/data.rs`): his build and body, NM's surfaces.
 pub struct Homer {
     pub build: delirium::ragdoll::Build,
     pub body: dms_game::body::Body,
-    /// NM's CONCRETE row (friction, elasticity), the Playroom's floor.
+    /// NM's CONCRETE row (friction, elasticity), the Playroom's floor, and its index in NM's surfaces.
     pub concrete: [f32; 2],
+    pub floor_material: u8,
 }
 
 fn load_homer(game: &Path) -> Result<Homer, String> {
@@ -58,8 +64,9 @@ fn load_homer(game: &Path) -> Result<Homer, String> {
     }
     let (build, frames) = g.homer()?;
     let body = dms_game::body::Body::new(&build, &frames);
-    let concrete = delirium::ragdoll::SURFACES.read().ok().and_then(|r| r.get(dms_game::concrete(&rows) as usize).copied()).unwrap_or([1.0, 0.1]);
-    Ok(Homer { build, body, concrete })
+    let floor_material = dms_game::concrete(&rows);
+    let concrete = delirium::ragdoll::SURFACES.read().ok().and_then(|r| r.get(floor_material as usize).copied()).unwrap_or([1.0, 0.1]);
+    Ok(Homer { build, body, concrete, floor_material })
 }
 
 pub struct Options {
@@ -73,6 +80,12 @@ pub struct Options {
     pub snap: bool,
     /// The view's yaw at once (degrees; 0 looks at the model's front).
     pub yaw: Option<f32>,
+    /// The screenshot's simulation: NM on the stood body with this Playroom button (`balance`), not a drop.
+    pub nm: Option<String>,
+    /// Under NM: the Playroom's poke of this many N s halfway through the screenshot's steps.
+    pub push: Option<f32>,
+    /// Homer's own body simulated, not the fit.
+    pub homer: bool,
 }
 
 fn main() {
@@ -89,7 +102,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let mut flag = |f: &str| args.iter().position(|a| a == f).map(|i| args.remove(i)).is_some();
-    let (snap, plain, verbose) = (flag("--snap"), flag("--plain"), flag("--verbose"));
+    let (snap, plain, verbose, homer_body) = (flag("--snap"), flag("--plain"), flag("--verbose"), flag("--homer"));
     let mut take = |flag: &str| {
         args.iter().position(|a| a == flag).map(|i| {
             let v = args.get(i + 1).cloned().unwrap_or_default();
@@ -117,6 +130,13 @@ fn run() -> Result<(), String> {
     let report = take("--snap-report");
     let yaw = take("--yaw").map(|s| s.parse::<f32>().map_err(|e| format!("--yaw {s}: {e}"))).transpose()?;
     let steps = take("--sim").map(|s| s.parse::<u64>().map_err(|e| format!("--sim {s}: {e}"))).transpose()?;
+    let nm = take("--nm");
+    let push = take("--push").map(|s| s.parse::<f32>().map_err(|e| format!("--push {s}: {e}"))).transpose()?;
+    if let Some(b) = &nm
+        && dms_vphysics::follow::button_lines(b).is_none()
+    {
+        return Err(format!("--nm {b}: not a Playroom button (balance, windmill, stayup, relax, ...)"));
+    }
     if !args.is_empty() {
         return Err(format!("unknown arguments {args:?}\n{USAGE}"));
     }
@@ -151,14 +171,15 @@ fn run() -> Result<(), String> {
         let sim = match steps {
             Some(n) if n > 0 => {
                 let dll = vphysics.clone().or_else(|| sim::find_vphysics(&gmod, repo.as_deref()).into_iter().next()).ok_or("--sim: no vphysics.dll of the fork")?;
-                Some((sim::Sim::new(&dll, &gmod.join("bin").join("win64"), &fs.surface_scripts(), "concrete", homer.concrete)?, n))
+                Some((sim::Sim::new(&dll, &gmod.join("bin").join("win64"), &fs.surface_scripts(), "concrete", homer.concrete, homer.floor_material)?, n))
             }
             _ => None,
         };
-        let bad = report::run(&homer, &fs, &filters, plain, verbose, sim);
+        let balance = (nm.as_deref() == Some("balance")).then(|| push.unwrap_or(dms_vphysics::follow::POKE));
+        let bad = report::run(&homer, &fs, &filters, plain, verbose, sim, balance);
         return if bad == 0 { Ok(()) } else { Err(format!("{bad} model(s) with faults")) };
     }
-    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap, yaw };
+    let opts = Options { gmod, repo, vphysics, model, screenshot: shot.map(|s| (s, steps.unwrap_or(0))), select, tool, snap, yaw, nm, push, homer: homer_body };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]).with_title("DMS rig editor"),
         depth_buffer: 24,
