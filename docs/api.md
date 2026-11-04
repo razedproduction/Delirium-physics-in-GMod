@@ -85,7 +85,7 @@ reaction or a message. The limit is `dms_max_agents` (8): Homers beyond it stay 
 
 ## Reactions (`DMS.FollowReact(id, line)`, `dms_react`)
 
-Points are `x,y,z` in metres, the game's frame. What the Playroom does on each: `module/src/follow/room.rs` (the port
+Points are `x,y,z` in metres, the game's frame. What the Playroom does on each: `crates/dms-core/src/follow/room.rs` (the port
 of `Sim`).
 
 | Line | The Playroom's reaction | What NM gets |

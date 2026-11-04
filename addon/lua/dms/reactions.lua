@@ -1,5 +1,5 @@
 -- The Playroom room's reactions on Homer (ROADMAP M6, docs/adr/0016, 0020): the game's damage, near misses, throws
--- and drops become the module's reactions (DMS.FollowReact, the Playroom's own code in module/src/follow/room.rs);
+-- and drops become the module's reactions (DMS.FollowReact, the Playroom's own code in crates/dms-core/src/follow/room.rs);
 -- the Playroom's switches are convars with its defaults; Homer is held on his get-up clip while he gets up by
 -- animation. Only the translation of the game's events is ours: part, point, direction, weapon.
 

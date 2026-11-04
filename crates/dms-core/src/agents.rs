@@ -136,6 +136,9 @@ unsafe fn env_timestep_impl(api: &Api, l: *mut LuaState) -> Result<c_int, String
 }
 
 /// The 21 PhysObj of the table at `arg`, `[i + 1]` part `i`'s.
+///
+/// # Safety
+/// `l` is a live Lua state, inside a native call on its thread.
 pub unsafe fn parts(api: &Api, l: *mut LuaState, arg: c_int) -> Result<Vec<*mut IPhysicsObject>, String> {
     if unsafe { (api.type_)(l, arg) } != TTABLE {
         return Err(format!("bad argument #{arg} (a table of {PARTS} PhysObj in NM's part order expected)"));

@@ -309,7 +309,7 @@ local function homerTab(p)
 	help(k, "Key", "A key that opens and closes this window (right-click the button to clear it). The console command dms_menu does the same, as does the DMS icon in the context menu (hold C).\n\ndms_menu_key")
 end
 
--- What the Playroom does on each reaction (module/src/follow/room.rs), with a button to try it on the Homer looked at.
+-- What the Playroom does on each reaction (crates/dms-core/src/follow/room.rs), with a button to try it on the Homer looked at.
 local REACTIONS = {
 	{ "Shot (pistol)", "shot weapon=pistol", "applyImpulse + the game's ShotTask, the weapon's taskparams set (weapon_set)" },
 	{ "Shot (shotgun)", "shot weapon=shotgun", "the same, the shotgun's set; pellets add their damage" },

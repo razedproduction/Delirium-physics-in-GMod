@@ -1,23 +1,19 @@
 //! gmsv_dms: Delirium active ragdolls (FOLLOW) on VPhysics-Box3D's `IPhysicsNM`.
 //!
 //! `require("dms")` registers the global table `DMS`.
+//!
+//! The FOLLOW core (the agents, the step callback, the LuaJIT bridge, NM's data, the map's world) is `dms-core`'s
+//! (docs/adr/0037), shared with the ragdolls project; what's only Homer's and the golden bench's is here: binding his
+//! ragdoll, the bench agent and `dms-ctl`'s channel, the self-test and the reference lists.
 
-mod agents;
 mod bench;
 mod bind;
-mod data;
 mod dev;
-mod ffi;
-mod follow;
-mod lua;
-mod natives;
-mod nm;
 mod nm_natives;
-mod react;
 mod selftest;
-mod step;
-mod tuning;
-mod world;
+
+// The core's modules under their old paths (`crate::follow`, ...), so the module's own code reads as before.
+use dms_core::{agents, data, ffi, follow, lua, natives, nm, react, step, world};
 
 use std::ffi::{CString, c_int};
 
@@ -126,12 +122,7 @@ pub unsafe extern "C" fn gmod13_close(l: *mut LuaState) -> c_int {
     vphysics_nm::release();
     // GMod unloads the module with each map, and what the statics hold isn't freed with it (docs/adr/0021): ~65 MB
     // a map with agents (NM's data, the map read, its worlds).
-    let _ = std::panic::catch_unwind(|| {
-        data::unload();
-        world::unload();
-        tuning::unload();
-        *delirium::ragdoll::SURFACES.write().unwrap_or_else(|e| e.into_inner()) = Vec::new();
-    });
+    let _ = std::panic::catch_unwind(dms_core::unload);
     if let Ok(api) = lua::api() {
         unsafe {
             (api.pushnil)(l);

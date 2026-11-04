@@ -1,6 +1,6 @@
 //! NM's FOLLOW step on the fork's bodies (ROADMAP M4, docs/adr/0008, 0016): the pieces of it that only read and
 //! write the crate `delirium` (the Playroom's agent, its message lines, the balancer's impulses, the drives and
-//! armature out of NM's doll, gravity's compensation, docs/adr/0007). The module's agents (`module/src/follow.rs`,
+//! armature out of NM's doll, gravity's compensation, docs/adr/0007). The module's agents (`crates/dms-core/src/follow.rs`,
 //! with the Playroom room's reactions round them) and the rig editor's (`tools/dms-rig`, bodyBalance on a fitted body)
 //! are made of the same pieces, so a body is driven the same in both.
 //!

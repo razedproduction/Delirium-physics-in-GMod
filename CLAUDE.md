@@ -93,9 +93,16 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 
 ## Устройство
 
-- `module/` — `gmsv_dms` (Rust, `cdylib`). `lua.rs` — LuaJIT API из уже загруженного `lua_shared.dll` через
-  `GetProcAddress` (без крейтов-обёрток), нативы через `lua::native!` (`extern "C-unwind"`, ошибки → `lua_error`).
-  `ffi/vphysics_nm.rs` — vtable `IPhysicsNM` строго в порядке объявления в заголовке.
+- `crates/dms-core` — ядро FOLLOW как библиотека (ADR 0037), общее с репо регдоллов (оно берёт его по пути, только
+  чтение): агент и слой реакций Playroom (`follow.rs`, `follow/room.rs`), step-callback (`step.rs`), нативы агентов
+  (`agents.rs`, `react.rs`, `natives.rs`), мир карты (`world.rs`), данные NM (`data.rs`, `nm.rs`), тюнинг. `lua.rs` —
+  LuaJIT API из уже загруженного `lua_shared.dll` через `GetProcAddress` (без крейтов-обёрток), нативы через
+  `lua::native!` (`extern "C-unwind"`, ошибки → `lua_error`). `ffi/vphysics_nm.rs` — `IPhysicsNM` (vtable в
+  `dms-vphysics` строго в порядке объявления в заголовке), копия заголовка — `ffi/vphysics_nm.h`. Ядро ничего не
+  регистрирует: списки `NATIVES` кладёт на свою таблицу модуль-хост. Другие тела — только через `BodyDef::new` и
+  `agents::start_body`, без веток под них в ядре.
+- `module/` — `gmsv_dms` (Rust, `cdylib`): `gmod13_open`/`close` и таблица `DMS`, привязка Homer (`bind.rs`),
+  стенд и канал `dms-ctl` (`bench.rs`, `dev.rs`), self-test; модули ядра подключены в корень под прежними именами.
 - `addon/lua/` — серверный Lua: `autorun/server/dms_init.lua` (`require("dms")`), `dms/*.lua`.
 - `vphysics/` — форк VPhysics-Box3D (C++, CMake, MIT); сабмодули `vphysics/external/*` (`git submodule update --init`).
 - `scripts/`, `docs/adr/`, `tools/` (появится в M3).
@@ -113,7 +120,7 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 
 ## Стиль
 
-- Код как в `module/src/*.rs`: краткие `///`-комментарии, `// SAFETY:` у каждого `unsafe`, без лишних зависимостей.
+- Код как в `crates/dms-core/src/*.rs` и `module/src/*.rs`: краткие `///`-комментарии, `// SAFETY:` у каждого `unsafe`, без лишних зависимостей.
 - Документация (README, ROADMAP, `docs/` с ADR, `golden/README.md`, заметки к релизу) — **на английском** (решение
   пользователя, M8); с пользователем по-прежнему по-русски.
 - Новое архитектурное решение — новый ADR `docs/adr/NNNN-slug.md` + строка в индексе; принятые ADR не

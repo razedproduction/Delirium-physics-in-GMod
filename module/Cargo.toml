@@ -14,5 +14,7 @@ delirium = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/c
 delirium-data = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-data" }
 delirium-sdk = { path = "../../delirium-physics (CLAUDE DONT CHANGE ANYTHING HERE)/crates/delirium-sdk" }
 dms-game = { path = "../tools/dms-game" }
+# The FOLLOW core (the agents, the step callback, the LuaJIT bridge), shared with the ragdolls project (docs/adr/0037).
+dms-core = { path = "../crates/dms-core" }
 # The fork's IPhysicsNM, the bind and NM's step on it, the core the ragdolls project shares (docs/adr/0031, 0036).
 dms-vphysics = { path = "../tools/dms-vphysics" }

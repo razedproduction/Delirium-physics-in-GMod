@@ -538,7 +538,7 @@ M9–M12.5 (NM on GMod's own ragdolls: the fit to any humanoid model, native NM 
 skeletons, NPCs' death ragdolls, live NPCs and the drunk player, the rig editor `tools/dms-rig`) were done here up to
 0.2.0 and moved to their own repository, `razedproduction/Delirium-ragdolls-in-GMod`, with their history
 ([ADR 0036](docs/adr/0036-project-split.md)). This repository is the golden project: Homer only, held to the Playroom.
-The ragdolls project uses this one's core (the fork, `tools/dms-vphysics`, `tools/dms-game`, `tools/dms-ctl`) read only.
+The ragdolls project uses this one's core (the fork, `crates/dms-core`, `tools/dms-vphysics`, `tools/dms-game`, `tools/dms-ctl`) read only.
 
 ### The split (ADR 0036)
 
@@ -548,8 +548,9 @@ The ragdolls project uses this one's core (the fork, `tools/dms-vphysics`, `tool
 - [x] The hulls as the fork grows them and the `.phy` reader moved from `dms-homer` into the core (`dms-vphysics`).
 - [ ] The new repository made from this one's history (the user: `gh repo create`), cleared of Homer there, its module
       and addon renamed, its core taken from here by path dependencies.
-- [ ] The parts of `module/` the ragdolls project needs (the FOLLOW loop, the room layer, the Lua bridge) made a
-      library here, Homer's behaviour unchanged (the golden comparison).
+- [x] The parts of `module/` the ragdolls project needs (the FOLLOW loop, the room layer, the Lua bridge) made a
+      library here, Homer's behaviour unchanged (the golden comparison): `crates/dms-core` (ADR 0037); other bodies
+      through `BodyDef::new` and `agents::start_body`.
 
 ### Release 0.2.0
 

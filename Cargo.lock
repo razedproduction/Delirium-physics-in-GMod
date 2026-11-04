@@ -575,6 +575,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e90a5dd66beeca277ae954f8055b02a712792b6b6b43f2bc2f92b0b7d8291614"
 
 [[package]]
+name = "dms-core"
+version = "0.2.0"
+dependencies = [
+ "delirium",
+ "delirium-data",
+ "delirium-sdk",
+ "dms-game",
+ "dms-vphysics",
+]
+
+[[package]]
 name = "dms-ctl"
 version = "0.2.0"
 
@@ -770,6 +781,7 @@ dependencies = [
  "delirium",
  "delirium-data",
  "delirium-sdk",
+ "dms-core",
  "dms-game",
  "dms-vphysics",
 ]

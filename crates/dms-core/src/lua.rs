@@ -137,6 +137,7 @@ unsafe fn raise(api: &Api, l: *mut LuaState, message: String) -> c_int {
 }
 
 /// Defines `extern "C-unwind" fn $name` running the [`Native`] `$body`.
+#[macro_export]
 macro_rules! native {
     ($name:ident => $body:path) => {
         unsafe extern "C-unwind" fn $name(l: *mut $crate::lua::LuaState) -> std::ffi::c_int {
@@ -145,7 +146,7 @@ macro_rules! native {
         }
     };
 }
-pub(crate) use native;
+pub use crate::native;
 
 impl Api {
     /// Calls the global `print` with `text`, as GMod's console shows it. Errors from it are dropped.
