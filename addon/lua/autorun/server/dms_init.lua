@@ -3,13 +3,11 @@ AddCSLuaFile("autorun/client/dms_client.lua")
 AddCSLuaFile("dms/cl_face.lua")
 AddCSLuaFile("dms/cl_overlay.lua")
 AddCSLuaFile("dms/cl_menu.lua")
-AddCSLuaFile("dms/cl_ragdolls.lua")
-AddCSLuaFile("dms/cl_rig_view.lua")
 
 -- This addon's release: the module has to be the same one (scripts\package.ps1 checks both are Cargo.toml's).
 DMS_ADDON_VERSION = "0.2.0"
--- The IPhysicsNM the module binds Homer with (docs/adr/0018), and the one GMod's ragdolls need (docs/adr/0027).
-local INTERFACE, INTERFACE_RAGDOLLS = 4, 6
+-- The IPhysicsNM the module binds Homer with (docs/adr/0018).
+local INTERFACE = 4
 
 -- What's wrong, to superadmins as they join (the console has it already).
 local function tellSuperadmins(name, lines)
@@ -75,11 +73,6 @@ include("dms/tuning.lua")
 include("dms/overlay.lua")
 include("dms/bench_scene.lua")
 include("dms/dev.lua")
-include("dms/skeletons.lua")
-include("dms/rig_view.lua")
-include("dms/ragdolls.lua")
-include("dms/deaths.lua")
-include("dms/live.lua")
 
 -- What keeps Homer from working here, a line each (empty: nothing): the fork, Homer's model, NM's data. For the
 -- console at start, superadmins as they join, and the DMS window's Debug tab.
@@ -92,10 +85,9 @@ function DMS_Problems()
 			.. "the original back: reinstall the fork (install.bat)"
 	else
 		local n = tonumber(iface:match("(%d+)$")) or 0
-		if n < INTERFACE_RAGDOLLS then
-			out[#out + 1] = string.format("vphysics.dll is an older VPhysics-Box3D (%s, DMS needs VBOX3D_NM_%03d%s): reinstall "
-				.. "the fork from this release (install.bat)", iface, INTERFACE_RAGDOLLS,
-				n >= INTERFACE and "; Homer works, GMod's ragdolls don't" or "")
+		if n < INTERFACE then
+			out[#out + 1] = string.format("vphysics.dll is an older VPhysics-Box3D (%s, DMS needs VBOX3D_NM_%03d): reinstall "
+				.. "the fork from this release (install.bat)", iface, INTERFACE)
 		end
 	end
 	if not util.IsValidModel(DMS_HOMER_MODEL) then

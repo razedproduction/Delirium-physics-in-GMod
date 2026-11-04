@@ -38,10 +38,8 @@ function DMS_AgentRoom()
 	return true
 end
 
--- The parts' PhysObj of an agent's entity: Homer's 21; none for a ragdoll on a native body (ragdolls.lua), whose
--- bodies Lua can't reach.
+-- The parts' PhysObj of an agent's entity: Homer's 21.
 local function partsOfEnt(ent)
-	if ent.DMS_Native then return {} end
 	return DMS_HomerParts(ent)
 end
 
@@ -72,8 +70,6 @@ local function forget(ent, id, why)
 	if not IsValid(ent) then return end
 	ent.DMS_Agent, ent.DMS_Lod, ent.DMS_StillFor = nil, nil, nil
 	if ent.DMS_Rising then DMS_Unfreeze(ent) end
-	-- A ragdoll's native body goes with its agent (ragdolls.lua).
-	if ent.DMS_Native then DMS_RagdollGone(ent) end
 	hook.Run("DMS_Detached", ent, why)
 end
 

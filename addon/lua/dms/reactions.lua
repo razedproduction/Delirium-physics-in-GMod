@@ -99,8 +99,6 @@ local pending = {}
 local function flushShots()
 	for ent, s in pairs(pending) do
 		local line = string.format("shot at=%s dir=%s weapon=%s", at(s.pos), dir(s.dir), s.weapon)
-		-- On a ragdoll: the NM part of the physics bone the bullet hit (ragdolls.lua).
-		if s.part then line = line .. " part=" .. s.part end
 		if #s.more > 0 then line = line .. " more=" .. table.concat(s.more, ",") end
 		DMS_React(ent, line)
 	end
@@ -109,8 +107,7 @@ end
 
 -- The part NM's doll has nearest to a point (its capsules), for the shotgun's other pellets: the module picks the
 -- first's itself.
-local function partNear(ent, pos, d)
-	if ent.DMS_Native then return DMS_RagdollPartAt(ent, pos, d) or 9 end
+local function partNear(ent, pos)
 	local parts = DMS_HomerParts(ent)
 	if not parts then return 9 end
 	local best, bd = 9, math.huge
@@ -125,10 +122,10 @@ end
 function DMS_QueueShot(ent, pos, d, weapon)
 	local s = pending[ent]
 	if s then
-		s.more[#s.more + 1] = partNear(ent, pos, d)
+		s.more[#s.more + 1] = partNear(ent, pos)
 	else
 		if not next(pending) then timer.Simple(0, flushShots) end
-		pending[ent] = { pos = pos, dir = d:GetNormalized(), weapon = weapon, more = {}, part = ent.DMS_Native and partNear(ent, pos, d) }
+		pending[ent] = { pos = pos, dir = d:GetNormalized(), weapon = weapon, more = {} }
 	end
 end
 
@@ -315,8 +312,7 @@ hook.Add("Think", "DMS_Reactions", function()
 		if r and s then
 			-- Burning (the Playroom's fire) while the game has him on fire.
 			if ent:IsOnFire() then DMS_React(ent, "burn") end
-			-- The face and the overlay are Homer's (his model's bones); the HUD and the window take any agent.
-			ent:SetNW2Bool("DMS_Homer", not ent.DMS_Native)
+			ent:SetNW2Bool("DMS_Homer", true)
 			ent:SetNW2Bool("DMS_Agent", true)
 			if ent.DMS_Spawn then ent:SetNW2Float("DMS_Floor", ent.DMS_Spawn.pos.z) end
 			ent:SetNW2Float("DMS_Health", r.health)
@@ -348,36 +344,24 @@ end)
 
 local function admin(ply) return not IsValid(ply) or ply:IsSuperAdmin() end
 
--- The Homer or humanoid ragdoll the player looks at (or the only one / all for the server console).
+-- The Homer the player looks at (or the only one / all for the server console).
 local function aimed(ply)
 	if not IsValid(ply) then return nil end
 	local tr = ply:GetEyeTrace()
 	local ent = tr.Entity
-	if IsValid(ent) and (ent:GetModel() == DMS_HOMER_MODEL or DMS_IsMapped(ent)) then return ent, tr end
+	if IsValid(ent) and ent:GetModel() == DMS_HOMER_MODEL then return ent, tr end
 end
 
-local LOOK = "look at a Homer ragdoll (" .. DMS_HOMER_MODEL .. ") or any humanoid ragdoll"
+local LOOK = "look at a Homer ragdoll (" .. DMS_HOMER_MODEL .. ")"
 
--- dms_attach: NM on the ragdoll looked at (balancing): Homer, or any humanoid model (ragdolls.lua), as it lies.
+-- dms_attach: NM on the Homer looked at (balancing), as he lies.
 concommand.Add("dms_attach", function(ply)
 	if not admin(ply) then return end
 	local ent = aimed(ply)
-	if not ent then
-		local tr = IsValid(ply) and ply:GetEyeTrace()
-		local why = tr and IsValid(tr.Entity) and tr.Entity:GetClass() == "prop_ragdoll" and DMS_WhyNotMapped(tr.Entity)
-		return say(ply, "[DMS] dms_attach: " .. (why or LOOK))
-	end
-	local function attach()
-		if not IsValid(ent) then return end
-		local c, why = dms.Attach(ent)
-		if not c then return say(ply, "[DMS] dms_attach: " .. tostring(why)) end
-		local fit = ent.DMS_Native and string.format(" (fitted body, %s: %.2f m, %.1f kg%s)", ent:GetNW2String("DMS_FitRig"), ent:GetNW2Float("DMS_FitHeight"),
-			ent:GetNW2Float("DMS_FitMass"), ent:GetNW2String("DMS_FitWarn") ~= "" and ("; " .. ent:GetNW2String("DMS_FitWarn")) or "") or ""
-		say(ply, "[DMS] NM on " .. tostring(ent) .. fit)
-	end
-	-- A model's first use: its body fitted in the background first (ROADMAP M12).
-	if ent:GetModel() == DMS_HOMER_MODEL then return attach() end
-	DMS_WhenReady(ent:GetModel(), ply, function(_, failed) if not failed then attach() end end)
+	if not ent then return say(ply, "[DMS] dms_attach: " .. LOOK) end
+	local c, why = dms.Attach(ent)
+	if not c then return say(ply, "[DMS] dms_attach: " .. tostring(why)) end
+	say(ply, "[DMS] NM on " .. tostring(ent))
 end)
 
 -- dms_detach: NM off the ragdoll looked at (an ordinary ragdoll, moving on as it was).

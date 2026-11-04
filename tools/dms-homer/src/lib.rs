@@ -1,9 +1,9 @@
 //! dms-homer: Homer's ragdoll for Garry's Mod, made from the user's copy of GTA IV for NM's body one to one
 //! (ROADMAP M3, docs/adr/0013). Never shipped: it's made on the user's machine (docs/adr/0006).
 
-pub mod hull;
-pub mod phy;
 pub mod smd;
+// Not Homer's own: shared with the ragdolls project through the core (docs/adr/0036).
+pub use dms_vphysics::{hull, phy, steam_gmod};
 pub mod visual;
 
 use delirium::prelude::*;
@@ -243,13 +243,4 @@ pub fn shape_distance(shape: &dms_game::body::Shape, p: Vec3) -> f32 {
             l.max(Vec3::ZERO).length() + l.max_element().min(0.0) - m
         }
     }
-}
-
-/// Garry's Mod in Steam's main library, from the registry (`HKCU\Software\Valve\Steam\SteamPath`).
-pub fn steam_gmod() -> Option<std::path::PathBuf> {
-    let o = std::process::Command::new("reg").args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"]).output().ok()?;
-    let text = String::from_utf8_lossy(&o.stdout).into_owned();
-    let path = text.lines().find(|l| l.contains("SteamPath"))?.split("REG_SZ").nth(1)?.trim().to_string();
-    let g = std::path::PathBuf::from(path).join("steamapps").join("common").join("GarrysMod");
-    g.is_dir().then_some(g)
 }

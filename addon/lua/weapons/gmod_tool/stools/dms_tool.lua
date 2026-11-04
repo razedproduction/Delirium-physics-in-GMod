@@ -65,9 +65,8 @@ if SERVER then
 	local function homer(ent) return IsValid(ent) and ent:GetModel() == DMS_HOMER_MODEL end
 
 	local function nm(ply, ent)
-		-- Homer, or a ragdoll NM drives on a fitted body (ROADMAP M10).
 		if IsValid(ent) and ent.DMS_Agent then return dms.Get(ent) end
-		DMS_Say(ply, "[DMS] aim at a Homer (or a ragdoll) with NM on it")
+		DMS_Say(ply, "[DMS] aim at a Homer with NM on him")
 	end
 
 	local function pick(ply, ent)

@@ -116,9 +116,6 @@ pub struct Script {
     pub fallen_from: Option<f32>,
     /// The Playroom's stage it runs on (`--stage`), none for its room.
     pub stage: Option<String>,
-    /// On a body fitted to this model (ROADMAP M10), in LEAD (`lead`: the reference) or in FOLLOW on its native body.
-    pub fit: Option<String>,
-    pub lead: bool,
     rec: String,
     unsupported: Vec<String>,
     pub done: bool,
@@ -138,8 +135,6 @@ impl Script {
             headless,
             fallen_from,
             stage: None,
-            fit: None,
-            lead: false,
             rec: format!("{REC_HEADER}\n"),
             unsupported: vec![],
             done: false,
@@ -151,19 +146,16 @@ impl Script {
     }
 }
 
-/// The body an agent drives: Homer's, or one fitted to a model (ROADMAP M9, `ragdolls.rs`).
+/// The body an agent drives: Homer's (the only one here, docs/adr/0036).
 pub struct BodyDef {
     pub build: delirium::ragdoll::Build,
     pub body: dms_game::body::Body,
-    /// Fitted to a model (ROADMAP M10): Homer's get-up clips don't fit it, so it stays down instead (the user's
-    /// choice).
-    pub fitted: bool,
 }
 
 impl BodyDef {
     /// Homer's, as the data holds it.
     pub fn homer(d: &Data) -> Arc<BodyDef> {
-        Arc::new(BodyDef { build: d.homer.clone(), body: d.body.clone(), fitted: false })
+        Arc::new(BodyDef { build: d.homer.clone(), body: d.body.clone() })
     }
 }
 
@@ -172,14 +164,11 @@ pub struct Follower {
     data: Arc<Data>,
     pub def: Arc<BodyDef>,
     world: Arc<Collision>,
-    /// Part `k`'s body, and its joint to its parent (null for the root); none in LEAD.
+    /// Part `k`'s body, and its joint to its parent (null for the root).
     objects: Vec<*mut IPhysicsObject>,
     joints: Vec<*mut IPhysicsConstraint>,
-    /// An object of the environment the agent steps with (its root's, or in LEAD the one it was given).
+    /// An object of the environment the agent steps with (its root's).
     anchor: *mut IPhysicsObject,
-    /// NM moves its own body (LEAD, the crate as the Playroom runs it): the reference a fitted body's FOLLOW is held
-    /// to, since the Playroom can't load a fitted build (ROADMAP M10). No game physics.
-    pub lead: bool,
     /// The Playroom's grab (`Grab` while `pulling`): part, the point in its frame, the target (NM's frame).
     pub grab: Option<(usize, Vec3, Vec3)>,
     /// Where NM's frame sits in the game's (m): NM sees `world - origin`. The bench's is the Playroom room's origin.
@@ -297,26 +286,7 @@ impl Follower {
             })
             .collect::<Result<Vec<_>, String>>()?;
         let anchor = objects[0];
-        Ok(Follower::make(id, data, def, (world, crop), objects, joints, anchor, origin, yaw, room_floor, &frames, false))
-    }
-
-    /// A LEAD agent (NM's own body, no game physics) standing as `nm_agent_create` puts one at `at` (NM's frame),
-    /// stepped with the environment of `anchor`: a fitted body's reference (ROADMAP M10).
-    ///
-    /// # Safety
-    /// `anchor` is live until the follower is dropped.
-    pub unsafe fn new_lead(
-        id: u32,
-        data: Arc<Data>,
-        def: Arc<BodyDef>,
-        world: Arc<Collision>,
-        anchor: *mut IPhysicsObject,
-        origin: Vec3,
-        at: Vec3,
-        room_floor: bool,
-    ) -> Follower {
-        let frames: Vec<Transform> = def.body.placed(at, 0.0).into_iter().map(|(p, q)| Transform::from_translation(p).with_rotation(q)).collect();
-        Follower::make(id, data, def, (world, None), vec![], vec![], anchor, origin, 0.0, room_floor, &frames, true)
+        Ok(Follower::make(id, data, def, (world, crop), objects, joints, anchor, origin, yaw, room_floor, &frames))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -332,12 +302,11 @@ impl Follower {
         yaw: f32,
         room_floor: bool,
         frames: &[Transform],
-        lead: bool,
     ) -> Follower {
         // As the Playroom makes its agents.
         let agent = core::agent(&def.build, frames, yaw);
         // The Playroom's `face`: his standing forward (from his thighs) in the head capsule's frame.
-        let cap0 = frames[HEAD].rotation * delirium::nmdbm::rage_link(dms_game::HOMER_NM, HEAD);
+        let cap0 = frames[HEAD].rotation * delirium::nmdbm::rage_link(&def.build.links, HEAD);
         let axis = if (cap0 * Vec3::Y).z < 0.0 { -Vec3::Y } else { Vec3::Y };
         let fwd = Vec3::Z.cross(frames[4].translation - frames[1].translation).with_z(0.0).normalize_or(Vec3::Y);
         let ahead = cap0.inverse() * fwd;
@@ -348,7 +317,6 @@ impl Follower {
             objects,
             joints,
             anchor,
-            lead,
             grab: None,
             origin,
             agent,
@@ -433,7 +401,7 @@ impl Follower {
     /// and up, the head's radius. Forward is the standing pose's, taken in the capsule's frame (`rage_link`), as the
     /// Playroom takes it from its room's start.
     pub fn face(&self) -> (Vec3, Vec3, Vec3, f32) {
-        let link = delirium::nmdbm::rage_link(dms_game::HOMER_NM, HEAD);
+        let link = delirium::nmdbm::rage_link(&self.def.build.links, HEAD);
         let (h, c) = (self.agent.doll.frames().nth(HEAD).unwrap_or_default(), self.agent.doll.capsules().nth(HEAD).unwrap_or_default());
         let r = self.def.build.parts.get(HEAD).map_or(0.1, |p| p.radius);
         (h.rotation.inverse() * (c.translation - h.translation), link * self.face.0, link * self.face.1, r)
@@ -487,7 +455,7 @@ impl Follower {
             }
             self.due += 1;
         }
-        if self.due == 0 || self.lead {
+        if self.due == 0 {
             return Ok(());
         }
         unsafe { self.read(nm)? };
@@ -533,7 +501,7 @@ impl Follower {
     /// # Safety
     /// The objects and joints are live.
     pub unsafe fn finish(&mut self, nm: &Nm, g_src: Vec3, mode: GravityMode) {
-        if self.parked.is_some() || self.lead {
+        if self.parked.is_some() {
             self.kicks.clear();
             return;
         }
@@ -659,21 +627,17 @@ impl Follower {
         if let Some(lines) = self.respawn.take() {
             // The Playroom's new agent on the get-up's last pose (`Agent::new(.., Quat::IDENTITY, 0.3)`: its room's
             // facing, here the one he was given), its messages' state new too.
-            let frames: Vec<Transform> = if self.lead {
-                self.agent.doll.frames().collect()
-            } else {
-                self.snap
-                    .iter()
-                    .map(|s| Transform::from_translation(Vec3::from_array(s.position) - self.origin).with_rotation(Quat::from_array(s.rotation).normalize()))
-                    .collect()
-            };
+            let frames: Vec<Transform> = self
+                .snap
+                .iter()
+                .map(|s| Transform::from_translation(Vec3::from_array(s.position) - self.origin).with_rotation(Quat::from_array(s.rotation).normalize()))
+                .collect();
             self.agent = core::agent(&self.def.build, &frames, self.yaw);
             self.msgs = msg::State::default();
             (self.predicted, self.before) = (vec![], vec![]);
             self.queued.extend(lines);
         }
-        // In LEAD the doll is NM's own body: nothing to read.
-        let moved = if self.lead { (0.0, 0.0, 0.0) } else { core::set_state(&mut self.agent.doll, &self.snap, self.origin)? };
+        let moved = core::set_state(&mut self.agent.doll, &self.snap, self.origin)?;
         // NM's prediction, scaled to the physics time that went by, against what Box3D did.
         if self.predicted.len() == PARTS && self.since > 0.0 {
             let s = (self.since / DT) as f32;
@@ -711,13 +675,8 @@ impl Follower {
         // The record's line of the step about to run: by the same token, the state the step starts from.
         let line = self.script.as_ref().filter(|s| !s.done).map(|_| self.rec_line(self.steps + 1));
         // NM's balancer's impulses, which its step hands to its own physics: in FOLLOW they go on the bodies.
-        let unit = if self.lead { None } else { core::balancer_unit(&self.agent, &self.def.build, dt) };
-        if self.lead {
-            // NM's own physics steps the doll (impulses, the balancer's included, solved in it), as the Playroom's.
-            self.agent.step(&self.def.build, &self.world, dt, &self.obstacles, &[]);
-        } else {
-            self.agent.step_follow(&self.def.build, &self.world, dt, &self.obstacles, &[]);
-        }
+        let unit = core::balancer_unit(&self.agent, &self.def.build, dt);
+        self.agent.step_follow(&self.def.build, &self.world, dt, &self.obstacles, &[]);
         self.steps += 1;
         self.kicks.extend(core::balancer_kicks(&self.agent, unit));
         self.predicted = (0..PARTS).map(|k| self.agent.doll.motion(k)).collect();
@@ -891,10 +850,6 @@ impl Follower {
     /// `applyImpulse` moves the Playroom's doll (`equalized_impulse`, solved in its physics step); in FOLLOW the
     /// body is Box3D's, so the same impulse goes on it, as a force over the next Source step.
     fn kick(&mut self, k: usize, impulse: Vec3, hit: Option<Vec3>, equalize: f32) {
-        // In LEAD NM's own physics took it with the message.
-        if self.lead {
-            return;
-        }
         self.kicks.extend(core::kick(&self.agent.doll, k, impulse, hit, equalize));
     }
 

@@ -39,7 +39,6 @@ struct UserData {
 
 pub struct Api {
     pub settop: unsafe extern "C" fn(*mut LuaState, c_int),
-    pub gettop: unsafe extern "C" fn(*mut LuaState) -> c_int,
     pub type_: unsafe extern "C" fn(*mut LuaState, c_int) -> c_int,
     pub tonumber: unsafe extern "C" fn(*mut LuaState, c_int) -> c_double,
     pub toboolean: unsafe extern "C" fn(*mut LuaState, c_int) -> c_int,
@@ -81,7 +80,6 @@ fn load() -> Result<Api, String> {
     }
     Ok(Api {
         settop: get!("lua_settop"),
-        gettop: get!("lua_gettop"),
         type_: get!("lua_type"),
         tonumber: get!("lua_tonumber"),
         toboolean: get!("lua_toboolean"),

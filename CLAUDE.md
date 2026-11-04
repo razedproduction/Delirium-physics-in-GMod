@@ -43,7 +43,10 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
   новый инструмент с новым подходом.
 - Только **win64** (`x86_64-pc-windows-msvc`, `gmsv_dms_win64.dll`). Никаких win32/x86/thiscall.
 - **Без AVX2**: у пользователя процессор без AVX2 — никаких `target-cpu=x86-64-v3`, `+avx2`, `+fma`.
-- Пока работаем **только с телом Homer**; модели ValveBiped отложены. Модель Homer импортируется заново тем же
+- **Этот реп — только тело Homer** (ADR 0036). Регдоллы GMod, ValveBiped, NPC, модели Workshop, редактор ригов —
+  в отдельном репе `razedproduction/Delirium-ragdolls-in-GMod` (без Homer); сюда их не возвращать. Он берёт ядро
+  отсюда только на чтение (path-зависимости на соседний checkout: `vphysics/`, `tools/dms-vphysics`, `tools/dms-game`,
+  `tools/dms-ctl`): публичный API ядра менять осознанно, с пометкой в PR. Модель Homer импортируется заново тем же
   кодом, каким Delirium строит Homer (`delirium-data` + `delirium::ragdoll::Rig`), из копии GTA IV пользователя;
   наработки прошлой попытки (`delirium-ragdoll`, её `homer.mdl`) не использовать (ROADMAP M3).
 - Игровые данные GTA IV и всё, что из них сделано (персонаж, build, модель Homer), в репозиторий и релизы не
@@ -96,8 +99,8 @@ VPhysics-Box3D. Тело — `prop_ragdoll` Homer; Delirium каждый физ�
 - `addon/lua/` — серверный Lua: `autorun/server/dms_init.lua` (`require("dms")`), `dms/*.lua`.
 - `vphysics/` — форк VPhysics-Box3D (C++, CMake, MIT); сабмодули `vphysics/external/*` (`git submodule update --init`).
 - `scripts/`, `docs/adr/`, `tools/` (появится в M3).
-- `tools/dms-vphysics` — FFI `IPhysicsNM`, привязка и нативное тело без Lua, хост форка вне игры (ADR 0031); общий для
-  модуля и `tools/dms-rig` (редактор ригов на egui, [docs/rig-editor.md](docs/rig-editor.md)).
+- `tools/dms-vphysics` — FFI `IPhysicsNM`, привязка и нативное тело без Lua, хост форка вне игры, оболочки частей
+  (`hull`) и `.phy` (ADR 0031, 0036); ядро, общее для модуля и репа регдоллов.
 
 Инварианты:
 - Внутри step-callback (`SetStepCallback`, внутри `Simulate`) — **никакого Lua и игровых вызовов**, только методы
